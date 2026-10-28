@@ -46,12 +46,8 @@ func RunCLIDomainArray(
 		groupedData := ConvertArrayToGrouped(results)
 
 		if outputFile == "" {
-			mergedOut, err := json.MarshalIndent(groupedData, "", "  ")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error marshaling grouped JSON: %v\n", err)
-				return 1
-			}
-			if err := os.WriteFile(inputPath, mergedOut, 0644); err != nil {
+			data := ExtendedGroupedData{Available: groupedData.Available, Unavailable: groupedData.Unavailable}
+			if err := writeGroupedJSON(inputPath, data); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing grouped JSON to %s: %v\n", inputPath, err)
 				return 1
 			}
@@ -100,13 +96,7 @@ func RunCLIGroupedInput(
 		}
 	} else {
 		ext = applyGroupedChecks(ext, newest)
-
-		out, err := json.MarshalIndent(ext, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshaling grouped JSON: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(finalOutputFile, out, 0644); err != nil {
+		if err := writeGroupedJSON(finalOutputFile, ext); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing grouped JSON to %s: %v\n", finalOutputFile, err)
 			return 1
 		}

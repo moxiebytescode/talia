@@ -98,7 +98,7 @@ func ConvertArrayToGrouped(arr []DomainRecord) GroupedData {
 	return gd
 }
 
-// groupedFile is the on-disk shape written by WriteGroupedFile: both result buckets are
+// groupedFile is the shape of grouped check snapshots: both result buckets are
 // always present, and unverified only when it still has domains waiting to be checked.
 type groupedFile struct {
 	GroupedData
@@ -122,6 +122,18 @@ func WriteGroupedFile(path string, newest GroupedData) error {
 		return fmt.Errorf("parse grouped file: %w", err)
 	}
 	data := applyGroupedChecks(file.asGrouped(), newest)
+	return writeGroupedJSON(path, data)
+}
+
+// writeGroupedJSON writes a complete grouped check snapshot, with both result
+// buckets represented as arrays even when empty. It does not merge existing data.
+func writeGroupedJSON(path string, data ExtendedGroupedData) error {
+	if data.Available == nil {
+		data.Available = []GroupedDomain{}
+	}
+	if data.Unavailable == nil {
+		data.Unavailable = []GroupedDomain{}
+	}
 	merged := groupedFile{
 		GroupedData: GroupedData{Available: data.Available, Unavailable: data.Unavailable},
 		Unverified:  data.Unverified,

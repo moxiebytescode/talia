@@ -1413,6 +1413,8 @@ func TestRunCLI_GroupedInputSeparateOutputMergesOnlyFreshChecks(t *testing.T) {
 	}
 }
 
+// TestRunCLI_GroupedInputSeparateOutputDestinationFormats verifies fresh checks
+// merge into missing, empty, and array destinations without copying stale input.
 func TestRunCLI_GroupedInputSeparateOutputDestinationFormats(t *testing.T) {
 	for _, format := range []string{"missing", "empty", "array"} {
 		t.Run(format, func(t *testing.T) {
@@ -1422,7 +1424,7 @@ func TestRunCLI_GroupedInputSeparateOutputDestinationFormats(t *testing.T) {
 				Unverified:  []DomainRecord{{Domain: "checked.com"}},
 			})
 			output := filepath.Join(t.TempDir(), "out.json")
-			want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "checked.com", Reason: ReasonNoMatch}}}
+			want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "checked.com", Reason: ReasonNoMatch}}, Unavailable: []GroupedDomain{}}
 			if format != "missing" {
 				raw := ""
 				if format == "array" {
@@ -1453,14 +1455,17 @@ func TestRunCLI_GroupedInputSeparateOutputDestinationFormats(t *testing.T) {
 	}
 }
 
+// TestRunCLI_GroupedInputSeparateOutputWithNoFreshChecks verifies destination
+// records and unverified domains survive when the input has no fresh checks.
 func TestRunCLI_GroupedInputSeparateOutputWithNoFreshChecks(t *testing.T) {
 	input := writeGroupedFixture(t, ExtendedGroupedData{
 		Available:   []GroupedDomain{{Domain: "input-only.com", Reason: ReasonNoMatch}},
 		Unavailable: []GroupedDomain{{Domain: "kept.com", Reason: ReasonTaken}},
 	})
 	want := ExtendedGroupedData{
-		Available:  []GroupedDomain{{Domain: "kept.com", Reason: ReasonNoMatch}},
-		Unverified: []DomainRecord{{Domain: "waiting.com"}},
+		Available:   []GroupedDomain{{Domain: "kept.com", Reason: ReasonNoMatch}},
+		Unavailable: []GroupedDomain{},
+		Unverified:  []DomainRecord{{Domain: "waiting.com"}},
 	}
 	output := writeGroupedFixture(t, want)
 	addr, _ := startCountingWhois(t)

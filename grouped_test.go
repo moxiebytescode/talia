@@ -12,6 +12,61 @@ import (
 	"testing"
 )
 
+// TestRunCLIGroupedOutputWritesResultArrays verifies grouped check snapshots
+// always contain both result buckets as arrays, even without any fresh checks.
+func TestRunCLIGroupedOutputWritesResultArrays(t *testing.T) {
+	for _, mode := range []struct {
+		name              string
+		grouped, separate bool
+	}{
+		{"array in place", false, false},
+		{"array separate", false, true},
+		{"grouped in place", true, false},
+		{"grouped separate", true, true},
+	} {
+		for _, withCheck := range []bool{false, true} {
+			name := "empty"
+			if withCheck {
+				name = "available"
+			}
+			t.Run(mode.name+"/"+name, func(t *testing.T) {
+				server, _ := startCountingWhois(t)
+				records := []DomainRecord{}
+				if withCheck {
+					records = append(records, DomainRecord{Domain: "a.com"})
+				}
+				var input any = records
+				if mode.grouped {
+					input = ExtendedGroupedData{Unverified: records}
+				}
+				path := writeGroupedFixture(t, input)
+				output := path
+				args := []string{"--whois=" + server, "--sleep=0", "--suggest=0", "--lightspeed=2", "--grouped-output"}
+				if mode.separate {
+					output = filepath.Join(t.TempDir(), "output.json")
+					args = append(args, "--output-file="+output)
+				}
+				if code := RunCLI(append(args, path)); code != 0 {
+					t.Fatalf("exit = %d", code)
+				}
+				raw, err := os.ReadFile(output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var buckets map[string]json.RawMessage
+				if err := json.Unmarshal(raw, &buckets); err != nil {
+					t.Fatal(err)
+				}
+				for _, bucket := range []string{"available", "unavailable"} {
+					if data := buckets[bucket]; len(data) == 0 || data[0] != '[' {
+						t.Errorf("%s must be a JSON array, got %s", bucket, data)
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestRunCLIGroupedOutputKeepsLastDuplicateCheck verifies repeated normalized
 // domains retain the final input-ordered check before results enter buckets,
 // across both input shapes and both in-place and separate grouped destinations.
@@ -52,10 +107,10 @@ func TestRunCLIGroupedOutputKeepsLastDuplicateCheck(t *testing.T) {
 					}
 				}()
 				records := []DomainRecord{{Domain: "example.com"}, {Domain: "Example.com"}}
-				want := ExtendedGroupedData{Unavailable: []GroupedDomain{{Domain: "Example.com", Reason: ReasonError, Log: "Error: empty WHOIS response"}}}
+				want := ExtendedGroupedData{Available: []GroupedDomain{}, Unavailable: []GroupedDomain{{Domain: "Example.com", Reason: ReasonError, Log: "Error: empty WHOIS response"}}}
 				if laterAvailable {
 					records[0], records[1] = records[1], records[0]
-					want = ExtendedGroupedData{Available: []GroupedDomain{{Domain: "example.com", Reason: ReasonNoMatch}}}
+					want = ExtendedGroupedData{Available: []GroupedDomain{{Domain: "example.com", Reason: ReasonNoMatch}}, Unavailable: []GroupedDomain{}}
 				}
 				var input any = records
 				if mode.grouped {
@@ -104,7 +159,7 @@ func TestRunCLIGroupedRechecksReplaceStaleResults(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	got := readGroupedFile(t, path)
-	want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "again.com", Reason: ReasonNoMatch}}}
+	want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "again.com", Reason: ReasonNoMatch}}, Unavailable: []GroupedDomain{}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fresh checks did not replace stale results: %#v", got)
 	}

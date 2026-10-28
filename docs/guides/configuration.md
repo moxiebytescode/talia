@@ -120,6 +120,8 @@ Writing to an existing `--output-file` keeps the order of its entries: a re-chec
 
 Grouped updates compare valid domains by normalized identity, so spelling variants such as `" Example.COM "` and `"example.com"` refer to the same domain. Stored spelling and metadata come from the retained record; identity comparisons do not rewrite them. Invalid names keep their distinct raw identities until explicitly cleaned.
 
+Grouped check output always includes `available` and `unavailable` as JSON arrays, using `[]` for an empty bucket. An empty `unverified` bucket is omitted. This shape is the same for in-place and separate output, even when there are no fresh checks.
+
 If a check run includes the same normalized domain more than once, grouped output keeps the last check in input order before assigning buckets. This applies to array and grouped input, including lightspeed runs; worker completion order does not change which duplicate is retained.
 
 For grouped input, `--grouped-output --output-file` merges only the results of checking the input's `unverified` bucket. The input's existing `available` and `unavailable` entries are not copied to the output file, so older input results cannot replace newer destination results. The input file stays unchanged when the output path is separate. Without these flags, checks update the input file in place and keep its existing results.
