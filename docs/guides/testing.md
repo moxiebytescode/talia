@@ -21,7 +21,9 @@ go tool cover -func=coverage.out
 | `checks_test.go` | CLI scheduling, actual concurrent overlap, result order, and log policy |
 | `domainfile_test.go` | Domain preservation, malformed input, array/grouped workflows, and normalized identity |
 | `whois_test.go` | WHOIS interpretation, TCP behavior, and stalled-response deadlines |
-| `suggestions_test.go` | Tool-calling requests, CLI flag precedence, and partial batch failures |
+| `suggestions_test.go` | Compatibility tool-calling requests, CLI flag precedence, and partial batch failures |
+| `providers_test.go` | Native OpenAI/Anthropic request contracts, response failures, and shared suggestion validation |
+| `provider_cli_test.go` | Provider/model/base precedence, credentials, native endpoint selection, and file preservation on failure |
 | `grouped_test.go` | Writing results into an existing grouped file (order, newest-wins, keeping `unverified`) |
 | `progress_test.go` | Progress output coloring (terminal detection, `NO_COLOR`) |
 | `cmd/talia/main_test.go` | `main()` exit code and `.env` precedence (shell env wins, quotes stripped) |
@@ -41,14 +43,17 @@ Two approaches:
 
 - `httptest.NewServer` provides a local HTTP server with controlled responses.
 - CLI tests point `--api-base` at the local server and exercise actual HTTP requests without process-wide transport overrides.
+- Native API tests also select `--provider` explicitly, so a local base does not select legacy Chat Completions compatibility mode.
 - The internal `httpDoer` seam allows a failing adapter to exercise transport errors directly.
+
+Provider tests assert the documented wire contracts, including JSON schemas, provider headers, refusal/truncation handling, and unusable suggestion data. These are local contract tests, not live API or account-access verification. Live checks require credentials for the chosen provider and incur API usage; the normal suite makes no external API calls.
 
 ## Test Isolation
 
 `TestMain` (in `main_test.go`) runs before all tests and:
 
 - Sets `skipEnvFile = true` to prevent `.env` file loading during tests.
-- Unsets `OPENAI_API_KEY` and `OPENAI_API_BASE` to prevent real API calls.
+- Unsets OpenAI/Anthropic credentials, base URLs, workspace selection, and provider/model settings to prevent shell configuration from selecting an external API during tests.
 
 Individual tests that modify env vars use `t.Setenv(...)`, which restores the original value when the test ends. Older tests use `defer os.Unsetenv(...)`.
 

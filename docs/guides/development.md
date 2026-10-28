@@ -24,6 +24,9 @@ The binary is built from `cmd/talia/main.go`, which is a thin wrapper around `ta
 export OPENAI_API_KEY=sk-...
 ./talia --suggest 10 --prompt "short tech names" domains.json
 
+# Generate with Anthropic (uses ANTHROPIC_API_KEY)
+./talia --provider anthropic --suggest 10 --no-verify domains.json
+
 # Clean a domain file
 ./talia --clean domains.json
 ```
@@ -38,12 +41,15 @@ whois.go              # TCP WHOIS client
 types.go              # all data structures
 grouped.go            # merge/deduplicate logic for grouped format
 domainfile.go         # array/grouped decoding, normalization, clean, merge, export
-suggestions.go        # tool-calling requests and concurrent suggestion batches
+suggestions.go        # compatibility library entry point and concurrent suggestion batches
+providers.go          # native OpenAI/Anthropic and compatible API contracts, suggestion validation
 progress.go           # thread-safe progress output
 env.go                # .env file loader
 ```
 
 All domain logic lives in the root `talia` package. The `cmd/talia/` sub-package exists only to produce the binary.
+
+The CLI defaults to native OpenAI Responses and supports native Anthropic Messages through `--provider`. Custom Chat Completions endpoints remain available through `openai-compatible`; the exported `GenerateDomainSuggestions` function also retains that contract for Go callers. Provider request and response details live in `providers.go`, while file lifecycle and WHOIS checking stay shared. See [ADR-0007](../adr/0007-explicit-suggestion-provider-contracts.md) and the [configuration reference](configuration.md).
 
 ## Lint
 
