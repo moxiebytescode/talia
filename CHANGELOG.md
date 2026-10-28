@@ -7,6 +7,15 @@
 
 * merge fresh grouped input checks into output files ([#42](https://github.com/moxiebytescode/talia/issues/42)) ([ad32b5c](https://github.com/moxiebytescode/talia/commit/ad32b5cfe6eb1557ebac36b3a21644710fad0e9a))
 * resolve triaged bugs [#30](https://github.com/moxiebytescode/talia/issues/30)–[#35](https://github.com/moxiebytescode/talia/issues/35) ([#37](https://github.com/moxiebytescode/talia/issues/37)) ([c4612f2](https://github.com/moxiebytescode/talia/commit/c4612f2dd36b4ee976cba7cd2bd5ede8a87c265d))
+* preserve existing domains and metadata when adding suggestions, and reject malformed or unreadable domain files before requests or writes ([#43](https://github.com/moxiebytescode/talia/pull/43)).
+* fix `--lightspeed=max`, keep grouped checks consistent across rechecks and normalized duplicates, and write empty result buckets as JSON arrays ([#43](https://github.com/moxiebytescode/talia/pull/43)).
+* preserve array files during `--clean`, accept array and grouped files for merge and export, and reject domain labels longer than 63 characters ([#43](https://github.com/moxiebytescode/talia/pull/43)).
+* enforce a 30-second WHOIS deadline and a two-minute suggestion request timeout, retain successful suggestions when other batches fail, and validate tool responses ([#43](https://github.com/moxiebytescode/talia/pull/43)).
+
+### Installation and Build Notes
+
+* The repository and Go module have moved from `github.com/sustanza/talia` to `github.com/moxiebytescode/talia`. Update clone URLs and Go imports accordingly ([#39](https://github.com/moxiebytescode/talia/pull/39)).
+* Building from source now requires Go 1.27.3 or later, as declared in `go.mod` ([#40](https://github.com/moxiebytescode/talia/pull/40)). Build the CLI with `go build -o talia ./cmd/talia/`.
 
 ## [1.5.0](https://github.com/moxiebytescode/talia/compare/v1.4.0...v1.5.0) (2026-03-11)
 
