@@ -18,8 +18,10 @@ go tool cover -func=coverage.out
 | File | Scope |
 |---|---|
 | `main_test.go` | Integration tests for all CLI paths |
-| `whois_test.go` | Unit tests for WHOIS client via `fakeWhoisClient` |
-| `suggestions_test.go` | Unit and integration tests for AI suggestion pipeline |
+| `checks_test.go` | CLI scheduling, actual concurrent overlap, result order, and log policy |
+| `domainfile_test.go` | Domain preservation, malformed input, array/grouped workflows, and normalized identity |
+| `whois_test.go` | WHOIS interpretation, TCP behavior, and stalled-response deadlines |
+| `suggestions_test.go` | Tool-calling requests, CLI flag precedence, and partial batch failures |
 | `grouped_test.go` | Writing results into an existing grouped file (order, newest-wins, keeping `unverified`) |
 | `progress_test.go` | Progress output coloring (terminal detection, `NO_COLOR`) |
 | `cmd/talia/main_test.go` | `main()` exit code and `.env` precedence (shell env wins, quotes stripped) |
@@ -38,8 +40,8 @@ Two approaches:
 ### HTTP Mocking (AI API)
 
 - `httptest.NewServer` provides a local HTTP server with controlled responses.
-- The `httpDoer` interface and package-level `testHTTPClient`/`testBaseURL` vars are the injection points.
-- Integration tests (`TestRunCLISuggest`, etc.) set these vars directly to route requests through the test server.
+- CLI tests point `--api-base` at the local server and exercise actual HTTP requests without process-wide transport overrides.
+- The internal `httpDoer` seam allows a failing adapter to exercise transport errors directly.
 
 ## Test Isolation
 
@@ -57,7 +59,7 @@ The `captureOutput` helper (in `main_test.go`) uses `os.Pipe()` to redirect `os.
 ## Parallelism in Tests
 
 - Pure unit tests are marked `t.Parallel()`.
-- Integration tests that touch shared package-level vars (`testHTTPClient`, `testBaseURL`) are **not** parallel.
+- CLI tests that change environment variables or capture stdout/stderr are **not** parallel.
 - CI runs `go test -race ./...` — the parallel WHOIS checker is designed to be race-detector clean (atomic counters, result-by-index writes, mutex for printing).
 
 ## Key Patterns
@@ -65,6 +67,8 @@ The `captureOutput` helper (in `main_test.go`) uses `os.Pipe()` to redirect `os.
 - **Flag isolation:** `RunCLI` uses `flag.NewFlagSet` (not `flag.CommandLine`), so parallel tests don't share flag state.
 - **Temp files:** New tests use `t.TempDir()`, which is removed automatically. Older tests create temporary files and clean up via `defer os.Remove(...)`.
 - **Exit code testing:** `cmd/talia/main_test.go` overrides the `exitFunc` variable to capture exit codes without actually calling `os.Exit`.
+
+Prefer tests through the CLI or a module's existing interface. The scheduling tests hold the first wave of TCP responses until the requested concurrency is observed; a result-count assertion alone cannot prove lightspeed is parallel. File tests use real temporary files and assert retained domains, reasons, logs, and merge precedence. Tests that only exercise a cloned implementation or reassert struct tags add no production statement coverage and have been removed.
 
 ## Related Documentation
 

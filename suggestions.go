@@ -6,14 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"regexp"
 	"strings"
+	"time"
 )
-
-// validDomainLabel matches a valid domain label: alphanumeric, may contain hyphens
-// but cannot start or end with a hyphen.
-var validDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 const (
 	defaultOpenAIBase      = "https://api.openai.com/v1"
@@ -38,25 +33,10 @@ type httpDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Test hooks for integration tests that exercise RunCLI.
-// These are not exported and should only be set by tests.
-var (
-	testHTTPClient httpDoer
-	testBaseURL    string
-)
-
-// GenerateDomainSuggestions contacts the OpenAI API using structured output
-// to get domain suggestions. The returned list can be used as the
-// "unverified" field in an ExtendedGroupedData file. If existingDomains is
-// provided, the AI is instructed to avoid suggesting those domains.
+// GenerateDomainSuggestions requests suggestions using forced tool calling.
+// Each request, including its response body, has a two-minute time limit.
 func GenerateDomainSuggestions(apiKey, prompt string, count int, model, baseURL string, existingDomains []string) ([]DomainRecord, error) {
-	client := httpDoer(http.DefaultClient)
-	if testHTTPClient != nil {
-		client = testHTTPClient
-	}
-	if testBaseURL != "" {
-		baseURL = testBaseURL
-	}
+	client := &http.Client{Timeout: 2 * time.Minute}
 	return generateSuggestions(apiKey, prompt, count, model, client, baseURL, existingDomains)
 }
 
@@ -123,7 +103,7 @@ func generateSuggestions(apiKey, prompt string, count int, model string, client 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -163,300 +143,50 @@ func generateSuggestions(apiKey, prompt string, count int, model string, client 
 		return nil, fmt.Errorf("no tool calls returned")
 	}
 
+	function := openaiResp.Choices[0].Message.ToolCalls[0].Function
+	if function.Name != functionName {
+		return nil, fmt.Errorf("unexpected tool %q: want %s", function.Name, functionName)
+	}
 	var out suggestionSchema
-	if err := json.Unmarshal([]byte(openaiResp.Choices[0].Message.ToolCalls[0].Function.Arguments), &out); err != nil {
+	if err := json.Unmarshal([]byte(function.Arguments), &out); err != nil {
 		return nil, fmt.Errorf("unmarshal structured output: %w", err)
 	}
 	return out.Unverified, nil
 }
 
-// normalizeDomain cleans up and validates a domain name.
-// Returns empty string if the domain is invalid.
-func normalizeDomain(domain string) string {
-	d := strings.TrimSpace(strings.ToLower(domain))
-
-	// Strip repeated .com suffixes
-	for strings.HasSuffix(d, ".com.com") {
-		d = strings.TrimSuffix(d, ".com")
+// generateSuggestionBatch starts every request with the same exclusion list.
+// One receiver owns progress and errors; results retain request order even when
+// requests complete out of order. Successful requests survive partial failures.
+func generateSuggestionBatch(apiKey, prompt string, count int, model, baseURL string, existingDomains []string, parallel int) ([]DomainRecord, error) {
+	type response struct {
+		index int
+		list  []DomainRecord
+		err   error
 	}
-
-	// Remove double dots
-	for strings.Contains(d, "..") {
-		d = strings.ReplaceAll(d, "..", ".")
+	responses := make(chan response, parallel)
+	for i := range parallel {
+		go func() {
+			list, err := GenerateDomainSuggestions(apiKey, prompt, count, model, baseURL, existingDomains)
+			responses <- response{index: i, list: list, err: err}
+		}()
 	}
-
-	// Must end with .com
-	if !strings.HasSuffix(d, ".com") {
-		return ""
-	}
-
-	// Basic format validation: name.com
-	parts := strings.Split(d, ".")
-	if len(parts) != 2 || parts[0] == "" {
-		return ""
-	}
-
-	// Validate the label contains only valid characters (letters, digits, hyphens)
-	// and doesn't start or end with a hyphen
-	if !validDomainLabel.MatchString(parts[0]) {
-		return ""
-	}
-
-	return d
-}
-
-// writeSuggestionsFile writes the suggested domains to path in the
-// ExtendedGroupedData format. If the file already exists, it merges
-// new suggestions with existing data and deduplicates.
-func writeSuggestionsFile(path string, list []DomainRecord) error {
-	// Read existing file if it exists
-	var existing ExtendedGroupedData
-	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &existing)
-	}
-
-	// Build set of all existing domains for deduplication
-	seen := make(map[string]bool)
-	for _, d := range existing.Available {
-		seen[strings.ToLower(d.Domain)] = true
-	}
-	for _, d := range existing.Unavailable {
-		seen[strings.ToLower(d.Domain)] = true
-	}
-	for _, d := range existing.Unverified {
-		seen[strings.ToLower(d.Domain)] = true
-	}
-
-	// Add new suggestions if not already present
-	for _, rec := range list {
-		domain := normalizeDomain(rec.Domain)
-		if domain == "" {
-			continue // skip invalid
-		}
-		if !seen[domain] {
-			seen[domain] = true
-			existing.Unverified = append(existing.Unverified, DomainRecord{Domain: domain})
-		}
-	}
-
-	b, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0644)
-}
-
-// cleanSuggestionsFile reads an existing suggestions file, normalizes all domains,
-// removes invalid ones, deduplicates, and writes back. Returns count of removed domains.
-func cleanSuggestionsFile(path string) (removed []string, err error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var data ExtendedGroupedData
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
-	var cleaned ExtendedGroupedData
-
-	// Process available
-	for _, d := range data.Available {
-		n := normalizeDomain(d.Domain)
-		if n == "" {
-			removed = append(removed, d.Domain)
-			continue
-		}
-		if !seen[n] {
-			seen[n] = true
-			cleaned.Available = append(cleaned.Available, GroupedDomain{Domain: n, Reason: d.Reason, Log: d.Log})
-		}
-	}
-
-	// Process unavailable
-	for _, d := range data.Unavailable {
-		n := normalizeDomain(d.Domain)
-		if n == "" {
-			removed = append(removed, d.Domain)
-			continue
-		}
-		if !seen[n] {
-			seen[n] = true
-			cleaned.Unavailable = append(cleaned.Unavailable, GroupedDomain{Domain: n, Reason: d.Reason, Log: d.Log})
-		}
-	}
-
-	// Process unverified
-	for _, d := range data.Unverified {
-		n := normalizeDomain(d.Domain)
-		if n == "" {
-			removed = append(removed, d.Domain)
-			continue
-		}
-		if !seen[n] {
-			seen[n] = true
-			cleaned.Unverified = append(cleaned.Unverified, DomainRecord{Domain: n})
-		}
-	}
-
-	out, err := json.MarshalIndent(cleaned, "", "  ")
-	if err != nil {
-		return removed, err
-	}
-	return removed, os.WriteFile(path, out, 0644)
-}
-
-// cleanTextFile reads a plain text domain list (one per line), normalizes,
-// removes invalid domains, deduplicates, and writes back sorted.
-func cleanTextFile(path string) (removed []string, err error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
-	var cleaned []string
-
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		n := normalizeDomain(line)
-		if n == "" {
-			removed = append(removed, line)
-			continue
-		}
-		if !seen[n] {
-			seen[n] = true
-			cleaned = append(cleaned, n)
-		}
-	}
-
-	content := strings.Join(cleaned, "\n")
-	if len(cleaned) > 0 {
-		content += "\n"
-	}
-	return removed, os.WriteFile(path, []byte(content), 0644)
-}
-
-// mergeFiles merges domains from multiple input files into outputFile, deduplicating.
-// Returns the total number of unique domains in the merged result.
-func mergeFiles(outputFile string, inputFiles []string) (int, error) {
-	var merged ExtendedGroupedData
-	seen := make(map[string]bool)
-
-	// Helper to add domains from a source to the merged result
-	mergeSource := func(source ExtendedGroupedData) {
-		for _, d := range source.Available {
-			domain := normalizeDomain(d.Domain)
-			if domain == "" {
-				continue
+	lists := make([][]DomainRecord, parallel)
+	var firstErr error
+	for completed := range parallel {
+		r := <-responses
+		if r.err != nil {
+			fmt.Printf("  [%d/%d] Request %d failed: %v\n", completed+1, parallel, r.index+1, r.err)
+			if firstErr == nil {
+				firstErr = r.err
 			}
-			if !seen[domain] {
-				seen[domain] = true
-				merged.Available = append(merged.Available, GroupedDomain{Domain: domain, Reason: d.Reason, Log: d.Log})
-			}
-		}
-		for _, d := range source.Unavailable {
-			domain := normalizeDomain(d.Domain)
-			if domain == "" {
-				continue
-			}
-			if !seen[domain] {
-				seen[domain] = true
-				merged.Unavailable = append(merged.Unavailable, GroupedDomain{Domain: domain, Reason: d.Reason, Log: d.Log})
-			}
-		}
-		for _, d := range source.Unverified {
-			domain := normalizeDomain(d.Domain)
-			if domain == "" {
-				continue
-			}
-			if !seen[domain] {
-				seen[domain] = true
-				merged.Unverified = append(merged.Unverified, DomainRecord{Domain: domain})
-			}
+		} else {
+			fmt.Printf("  [%d/%d] Request %d returned %d suggestions\n", completed+1, parallel, r.index+1, len(r.list))
+			lists[r.index] = r.list
 		}
 	}
-
-	// Read and merge all input files
-	for _, inputFile := range inputFiles {
-		raw, err := os.ReadFile(inputFile)
-		if err != nil {
-			return 0, fmt.Errorf("reading %s: %w", inputFile, err)
-		}
-		var source ExtendedGroupedData
-		if err := json.Unmarshal(raw, &source); err != nil {
-			return 0, fmt.Errorf("parsing %s: %w", inputFile, err)
-		}
-		mergeSource(source)
+	var all []DomainRecord
+	for _, list := range lists {
+		all = append(all, list...)
 	}
-
-	totalDomains := len(merged.Available) + len(merged.Unavailable) + len(merged.Unverified)
-
-	out, err := json.MarshalIndent(merged, "", "  ")
-	if err != nil {
-		return totalDomains, err
-	}
-	return totalDomains, os.WriteFile(outputFile, out, 0644)
-}
-
-// exportAvailableDomains reads an input file and exports all available domains
-// to a plain text file (one domain per line). Returns the number of domains exported.
-func exportAvailableDomains(inputFile, outputFile string) (int, error) {
-	raw, err := os.ReadFile(inputFile)
-	if err != nil {
-		return 0, fmt.Errorf("reading %s: %w", inputFile, err)
-	}
-
-	var data ExtendedGroupedData
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return 0, fmt.Errorf("parsing %s: %w", inputFile, err)
-	}
-
-	var lines []string
-	for _, d := range data.Available {
-		lines = append(lines, d.Domain)
-	}
-
-	content := strings.Join(lines, "\n")
-	if len(lines) > 0 {
-		content += "\n"
-	}
-
-	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
-		return 0, fmt.Errorf("writing %s: %w", outputFile, err)
-	}
-
-	return len(lines), nil
-}
-
-// readExistingDomains reads all domains from an existing suggestions file
-// for use in avoiding duplicates when generating new suggestions.
-func readExistingDomains(path string) []string {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-
-	var data ExtendedGroupedData
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil
-	}
-
-	var domains []string
-	for _, d := range data.Available {
-		domains = append(domains, d.Domain)
-	}
-	for _, d := range data.Unavailable {
-		domains = append(domains, d.Domain)
-	}
-	for _, d := range data.Unverified {
-		domains = append(domains, d.Domain)
-	}
-	return domains
+	return all, firstErr
 }

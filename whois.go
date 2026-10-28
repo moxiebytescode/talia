@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 // WhoisClient abstracts a WHOIS lookup mechanism.
@@ -17,12 +18,21 @@ type WhoisClient interface {
 // NetWhoisClient performs WHOIS lookups over TCP.
 type NetWhoisClient struct {
 	Server string
+	// Timeout bounds connection setup, query writing, and response reading.
+	// Values <= 0 use the default of 30 seconds.
+	Timeout time.Duration
 }
 
 // Lookup queries the configured WHOIS server for the given domain and returns
 // the raw response string.
 func (c NetWhoisClient) Lookup(domain string) (string, error) {
-	conn, err := net.Dial("tcp", c.Server)
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	dialer := net.Dialer{Deadline: deadline}
+	conn, err := dialer.Dial("tcp", c.Server)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to WHOIS: %w", err)
 	}
@@ -32,7 +42,12 @@ func (c NetWhoisClient) Lookup(domain string) (string, error) {
 		}
 	}()
 
-	_, _ = fmt.Fprintf(conn, "%s\r\n", domain)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return "", fmt.Errorf("set WHOIS deadline: %w", err)
+	}
+	if _, err := fmt.Fprintf(conn, "%s\r\n", domain); err != nil {
+		return "", fmt.Errorf("write WHOIS query: %w", err)
+	}
 
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.CloseWrite()
@@ -57,6 +72,9 @@ func (c NetWhoisClient) Lookup(domain string) (string, error) {
 // response to determine availability.
 func CheckDomainAvailabilityWithClient(domain string, client WhoisClient) (bool, AvailabilityReason, string, error) {
 	resp, err := client.Lookup(domain)
+	if err == nil && resp == "" {
+		err = fmt.Errorf("empty WHOIS response")
+	}
 	if err != nil {
 		return false, ReasonError, err.Error(), err
 	}

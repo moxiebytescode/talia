@@ -1,11 +1,13 @@
 package talia
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeWhoisClient struct {
@@ -17,6 +19,8 @@ func (f fakeWhoisClient) Lookup(domain string) (string, error) {
 	return f.resp, f.err
 }
 
+// TestCheckDomainAvailabilityWithClient verifies raw responses map to the
+// expected availability reason, with failed and empty responses treated as ERROR.
 func TestCheckDomainAvailabilityWithClient(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -44,6 +48,12 @@ func TestCheckDomainAvailabilityWithClient(t *testing.T) {
 			wantReason: ReasonError,
 			wantErr:    true,
 		},
+		{
+			name:       "empty response",
+			client:     fakeWhoisClient{},
+			wantReason: ReasonError,
+			wantErr:    true,
+		},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,6 +69,43 @@ func TestCheckDomainAvailabilityWithClient(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestNetWhoisClientBoundsStalledResponses verifies the deadline covers silent
+// and partial responses, including partial text that otherwise looks available.
+func TestNetWhoisClientBoundsStalledResponses(t *testing.T) {
+	for _, response := range []string{"", "No match for example.com"} {
+		t.Run(response, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			stop := make(chan struct{})
+			t.Cleanup(func() { close(stop) })
+			query := make(chan string, 1)
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				line, _ := bufio.NewReader(conn).ReadString('\n')
+				query <- line
+				_, _ = io.WriteString(conn, response)
+				<-stop // a peer that never closes its response
+			}()
+			client := NetWhoisClient{Server: ln.Addr().String(), Timeout: 50 * time.Millisecond}
+			available, reason, log, err := CheckDomainAvailabilityWithClient("example.com", client)
+			var networkError net.Error
+			if available || reason != ReasonError || log == "" || !errors.As(err, &networkError) || !networkError.Timeout() {
+				t.Fatalf("stalled check = %v, %s, %q, %v", available, reason, log, err)
+			}
+			if got := <-query; got != "example.com\r\n" {
+				t.Fatalf("WHOIS query = %q", got)
 			}
 		})
 	}
@@ -96,6 +143,8 @@ func TestNetWhoisClientLookupDialError(t *testing.T) {
 	}
 }
 
+// TestNetWhoisClientLookupEmpty verifies a peer that accepts the query but sends
+// no response returns an empty-response error.
 func TestNetWhoisClientLookupEmpty(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -105,6 +154,7 @@ func TestNetWhoisClientLookupEmpty(t *testing.T) {
 	go func() {
 		conn, _ := ln.Accept()
 		if conn != nil {
+			_, _ = io.Copy(io.Discard, conn)
 			helperClose(nil, conn, "conn")
 		}
 	}()

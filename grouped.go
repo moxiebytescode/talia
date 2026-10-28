@@ -2,9 +2,19 @@ package talia
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 )
+
+// groupedDomainKey compares valid domains by normalized identity without
+// rewriting stored records or collapsing distinct invalid domains into one key.
+func groupedDomainKey(raw string) string {
+	if normalized := normalizeDomain(raw); normalized != "" {
+		return normalized
+	}
+	return raw
+}
 
 // mergeGrouped merges new grouped results into existing grouped data, deduplicating by domain.
 // The newest result for a domain wins. Existing entries keep their position when re-checked
@@ -18,27 +28,28 @@ func mergeGrouped(existing, newest GroupedData) GroupedData {
 	}
 	latest := make(map[string]bucketedEntry)
 	for _, gd := range existing.Available {
-		latest[gd.Domain] = bucketedEntry{gd, true}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, true}
 	}
 	for _, gd := range existing.Unavailable {
-		latest[gd.Domain] = bucketedEntry{gd, false}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, false}
 	}
 	for _, gd := range newest.Available {
-		latest[gd.Domain] = bucketedEntry{gd, true}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, true}
 	}
 	for _, gd := range newest.Unavailable {
-		latest[gd.Domain] = bucketedEntry{gd, false}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, false}
 	}
 
 	// Emit domains in order of first appearance within their final bucket.
 	out := GroupedData{}
 	emitted := make(map[string]bool)
 	emit := func(gd GroupedDomain, available bool) {
-		r := latest[gd.Domain]
-		if emitted[gd.Domain] || r.available != available {
+		key := groupedDomainKey(gd.Domain)
+		r := latest[key]
+		if emitted[key] || r.available != available {
 			return
 		}
-		emitted[gd.Domain] = true
+		emitted[key] = true
 		if available {
 			out.Available = append(out.Available, r.rec)
 		} else {
@@ -61,9 +72,18 @@ func mergeGrouped(existing, newest GroupedData) GroupedData {
 }
 
 // ConvertArrayToGrouped turns an array of DomainRecord into GroupedData.
+// Records with the same normalized identity retain only their last occurrence,
+// so bucket assignment cannot make an earlier failure override a later success.
 func ConvertArrayToGrouped(arr []DomainRecord) GroupedData {
 	var gd GroupedData
-	for _, rec := range arr {
+	last := make(map[string]int, len(arr))
+	for i, rec := range arr {
+		last[groupedDomainKey(rec.Domain)] = i
+	}
+	for i, rec := range arr {
+		if last[groupedDomainKey(rec.Domain)] != i {
+			continue
+		}
 		gDom := GroupedDomain{
 			Domain: rec.Domain,
 			Reason: rec.Reason,
@@ -78,7 +98,7 @@ func ConvertArrayToGrouped(arr []DomainRecord) GroupedData {
 	return gd
 }
 
-// groupedFile is the on-disk shape written by WriteGroupedFile: both result buckets are
+// groupedFile is the shape of grouped check snapshots: both result buckets are
 // always present, and unverified only when it still has domains waiting to be checked.
 type groupedFile struct {
 	GroupedData
@@ -93,41 +113,30 @@ func WriteGroupedFile(path string, newest GroupedData) error {
 		return nil
 	}
 
-	existing := groupedFile{}
-
-	info, err := os.Stat(path)
-	if err == nil && info.Size() > 0 {
-		if info.IsDir() {
-			return fmt.Errorf("read grouped file: %s is a directory", path)
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
+	file, err := readDomainFile(path, true)
+	if err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
 			return fmt.Errorf("read grouped file: %w", err)
 		}
-		if err := json.Unmarshal(raw, &existing); err != nil {
-			var arr []DomainRecord
-			if err2 := json.Unmarshal(raw, &arr); err2 == nil {
-				existing = groupedFile{GroupedData: ConvertArrayToGrouped(arr)}
-			} else {
-				return fmt.Errorf("parse grouped file: %w", err)
-			}
-		}
-	} else if err == nil && info.IsDir() {
-		return fmt.Errorf("read grouped file: %s is a directory", path)
+		return fmt.Errorf("parse grouped file: %w", err)
 	}
+	data := applyGroupedChecks(file.asGrouped(), newest)
+	return writeGroupedJSON(path, data)
+}
 
-	checked := make(map[string]bool)
-	for _, gd := range newest.Available {
-		checked[gd.Domain] = true
+// writeGroupedJSON writes a complete grouped check snapshot, with both result
+// buckets represented as arrays even when empty. It does not merge existing data.
+func writeGroupedJSON(path string, data ExtendedGroupedData) error {
+	if data.Available == nil {
+		data.Available = []GroupedDomain{}
 	}
-	for _, gd := range newest.Unavailable {
-		checked[gd.Domain] = true
+	if data.Unavailable == nil {
+		data.Unavailable = []GroupedDomain{}
 	}
-	merged := groupedFile{GroupedData: mergeGrouped(existing.GroupedData, newest)}
-	for _, rec := range existing.Unverified {
-		if !checked[rec.Domain] {
-			merged.Unverified = append(merged.Unverified, rec)
-		}
+	merged := groupedFile{
+		GroupedData: GroupedData{Available: data.Available, Unavailable: data.Unavailable},
+		Unverified:  data.Unverified,
 	}
 
 	out, err := json.MarshalIndent(merged, "", "  ")
@@ -138,4 +147,23 @@ func WriteGroupedFile(path string, newest GroupedData) error {
 		return fmt.Errorf("write grouped file: %w", err)
 	}
 	return nil
+}
+
+// applyGroupedChecks owns newest-wins transitions for both in-place and separate
+// grouped files. Only fresh checks remove domains from the unverified bucket.
+func applyGroupedChecks(existing ExtendedGroupedData, newest GroupedData) ExtendedGroupedData {
+	checked := make(map[string]bool)
+	for _, bucket := range [][]GroupedDomain{newest.Available, newest.Unavailable} {
+		for _, rec := range bucket {
+			checked[groupedDomainKey(rec.Domain)] = true
+		}
+	}
+	merged := mergeGrouped(GroupedData{Available: existing.Available, Unavailable: existing.Unavailable}, newest)
+	out := ExtendedGroupedData{Available: merged.Available, Unavailable: merged.Unavailable}
+	for _, rec := range existing.Unverified {
+		if !checked[groupedDomainKey(rec.Domain)] {
+			out.Unverified = append(out.Unverified, rec)
+		}
+	}
+	return out
 }
