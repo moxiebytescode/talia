@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/sustanza/talia"
+	"github.com/moxiebytescode/talia"
 )
 
 var exitFunc = os.Exit

@@ -1,4 +1,4 @@
-module github.com/sustanza/talia
+module github.com/moxiebytescode/talia
 
 go 1.27.1
 
