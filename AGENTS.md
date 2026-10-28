@@ -18,13 +18,13 @@ go tool golangci-lint run      # lint
 - [Development Guide](docs/guides/development.md) — building, linting, CI, releases
 - [Configuration Reference](docs/guides/configuration.md) — flags, env vars, `.env`, and behavior notes
 - [Testing Guide](docs/guides/testing.md) — test architecture, mocking, and isolation
-- Known bugs and open work live in [GitHub Issues](https://github.com/sustanza/talia/issues)
+- Known bugs and open work live in [GitHub Issues](https://github.com/moxiebytescode/talia/issues)
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `sustanza/talia`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `moxiebytescode/talia`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

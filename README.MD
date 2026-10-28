@@ -1,8 +1,8 @@
 # Talia
 
-[![CI](https://github.com/sustanza/talia/actions/workflows/ci.yml/badge.svg)](https://github.com/sustanza/talia/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sustanza/talia?logo=github&sort=semver)](https://github.com/sustanza/talia/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/sustanza/talia.svg)](https://pkg.go.dev/github.com/sustanza/talia)
+[![CI](https://github.com/moxiebytescode/talia/actions/workflows/ci.yml/badge.svg)](https://github.com/moxiebytescode/talia/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/moxiebytescode/talia?logo=github&sort=semver)](https://github.com/moxiebytescode/talia/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/moxiebytescode/talia.svg)](https://pkg.go.dev/github.com/moxiebytescode/talia)
 
 Talia is a command-line tool for domain name discovery. It combines **AI-powered domain suggestion generation** (via OpenAI, Google Gemini, or any OpenAI-compatible API) with **WHOIS availability checking** to help you find available domain names fast.
 
@@ -102,7 +102,7 @@ Talia can generate domain name suggestions using AI, check domain availability v
 ### Steps
 
     # Clone the repository:
-    git clone https://github.com/sustanza/talia.git
+    git clone https://github.com/moxiebytescode/talia.git
     cd talia
 
     # Build Talia:
