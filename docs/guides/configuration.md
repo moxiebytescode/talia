@@ -14,8 +14,9 @@ All CLI flags, environment variables, and `.env` file support.
 | `--suggest` | int | `0` | Number of AI suggestions to generate per request |
 | `--suggest-parallel` | int | `1` | Number of concurrent AI suggestion requests |
 | `--prompt` | string | — | Natural language prompt to guide AI suggestions |
-| `--model` | string | `gpt-5-mini` | AI model name |
-| `--api-base` | string | — | Base URL for OpenAI-compatible API |
+| `--provider` | string | `openai` | Suggestion provider: `openai`, `anthropic`, or `openai-compatible` |
+| `--model` | string | Provider default | `gpt-6.1-terra` for OpenAI; `claude-haiku-5-5` for Anthropic; `gpt-6-luna` for compatibility mode |
+| `--api-base` | string | Provider default | Base URL for the selected provider's API |
 | `--fresh` | bool | `false` | Don't send existing domains as exclusions to AI |
 | `--clean` | bool | `false` | Normalize/deduplicate domains in the file, then exit |
 | `--no-verify` | bool | `false` | Skip WHOIS verification after generating suggestions |
@@ -30,8 +31,12 @@ All CLI flags, environment variables, and `.env` file support.
 |---|---|---|
 | `TALIA_FILE` | positional arg | Target file path |
 | `WHOIS_SERVER` | `--whois` | WHOIS server `host:port` |
-| `OPENAI_API_KEY` | — | Required for `--suggest`. No flag equivalent |
-| `OPENAI_API_BASE` | `--api-base` | Falls back to `https://api.openai.com/v1` |
+| `TALIA_PROVIDER` | `--provider` | Suggestion provider; defaults to `openai`, subject to legacy custom-base selection below |
+| `OPENAI_API_KEY` | — | Required for OpenAI and OpenAI-compatible suggestions. No flag equivalent |
+| `ANTHROPIC_API_KEY` | — | Required for Anthropic suggestions. No flag equivalent |
+| `OPENAI_API_BASE` | `--api-base` | OpenAI/compatibility base; defaults to `https://api.openai.com/v1` |
+| `ANTHROPIC_API_BASE` | `--api-base` | Anthropic base; defaults to `https://api.anthropic.com/v1` |
+| `ANTHROPIC_WORKSPACE_ID` | — | Sends Anthropic workspace selection when required by the API key |
 | `TALIA_SUGGEST` | `--suggest` | Ignored if file has pending `unverified` domains |
 | `TALIA_SUGGEST_PARALLEL` | `--suggest-parallel` | Number of parallel AI requests |
 | `TALIA_PROMPT` | `--prompt` | Extra context for AI suggestions |
@@ -53,11 +58,10 @@ Example `.env` file:
 
 ```
 OPENAI_API_KEY=your-api-key
-OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai
+TALIA_PROVIDER=openai
 WHOIS_SERVER=whois.verisign-grs.com:43
 TALIA_PROMPT=short brandable startup names
 TALIA_SUGGEST=10
-TALIA_MODEL=gemini-3.1-flash-lite
 TALIA_FILE=suggestions.json
 ```
 
@@ -72,7 +76,25 @@ Rules:
 
 ### Explicit Flags Always Win
 
-`TALIA_MODEL`, `TALIA_SUGGEST_PARALLEL` and `TALIA_SUGGEST` apply only when their flag is not passed. Passing the flag explicitly, even with its default value (`--model=gpt-5-mini`, `--suggest-parallel=1`, `--suggest=0`), overrides the env var. String flags such as `--prompt`, `--api-base` and `--whois` fall back to their env var whenever they are empty.
+`TALIA_PROVIDER`, `TALIA_MODEL`, `TALIA_SUGGEST_PARALLEL` and `TALIA_SUGGEST` apply only when their flag is not passed. Passing the flag explicitly, even with its default value (`--provider=openai`, `--model=gpt-6.1-terra`, `--suggest-parallel=1`, `--suggest=0`), overrides the env var. An explicitly empty provider or model is an error. String flags such as `--prompt`, `--api-base` and `--whois` fall back to their env var whenever they are empty.
+
+### Suggestion Providers
+
+- `openai` uses the native Responses API with strict JSON structured output. The default model is [`gpt-6.1-terra`](https://developers.openai.com/api/docs/models/gpt-6.1-terra).
+- `anthropic` uses the native Messages API with JSON structured output and API version `2026-10-21`. The default model is [`claude-haiku-5-5`](https://platform.claude.com/docs/en/models/haiku-5-5/overview). Requests have an output token budget of 8192, including thinking tokens.
+- `openai-compatible` uses Chat Completions with a forced `suggest_domains` tool. Its default remains `gpt-6-luna` because Terra's tool calling requires Responses. Support is best effort: the endpoint and selected model must support forced tool calling. Choose the endpoint's model with `--model` or `TALIA_MODEL`.
+
+`--api-base` overrides the selected provider's base environment variable. Base URLs include the API prefix (`/v1` for the official APIs), not the operation path (`/responses`, `/messages`, or `/chat/completions`). Selecting a provider explicitly preserves its protocol even when you use a custom base URL.
+
+For backward compatibility, when neither `--provider` nor `TALIA_PROVIDER` is set, a custom base URL other than `https://api.openai.com/v1` selects `openai-compatible`. The official OpenAI base, including a trailing slash, selects native OpenAI. `ANTHROPIC_API_BASE` is used only after selecting `anthropic`.
+
+`TALIA_MODEL` applies to whichever provider is selected; unset it to use provider defaults when switching providers. Custom models must support their provider's JSON structured output or compatibility tool-calling contract. Talia does not discover models or switch protocols automatically after a failure. The exported Go function `GenerateDomainSuggestions` retains its Chat Completions contract; provider selection described here applies to the CLI.
+
+### Suggestion Results and Failures
+
+Talia rejects refusals, truncated responses, malformed suggestion data, and responses with no usable `.com` suggestions. Suggestions are normalized, deduplicated, and filtered against the exclusion list. Counts are best effort: filtering or overlap between parallel requests can reduce the final total. There are no automatic retries.
+
+If every request fails, Talia reports an error without creating or rewriting the domain file. When only some parallel requests fail, successful suggestions are preserved. `--fresh` omits existing domains from the request and its exclusion filtering; writing still deduplicates against the domain file.
 
 ### `--sleep` During Auto-Verification
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -114,6 +115,60 @@ func RunCLIGroupedInput(
 // skipEnvFile is a test hook to skip loading .env files during tests.
 var skipEnvFile bool
 
+// resolveSuggestionConfig preserves custom Chat Completions endpoints unless a
+// provider is selected explicitly. Credentials and defaults belong to that provider.
+func resolveSuggestionConfig(provider, model, baseURL string, explicitProvider, explicitModel bool) (suggestionConfig, error) {
+	if !explicitProvider {
+		provider = os.Getenv("TALIA_PROVIDER")
+	}
+	if baseURL == "" {
+		if provider == "anthropic" {
+			baseURL = os.Getenv("ANTHROPIC_API_BASE")
+		} else {
+			baseURL = os.Getenv("OPENAI_API_BASE")
+		}
+	}
+	if provider == "" && !explicitProvider {
+		provider = "openai"
+		if baseURL != "" && strings.TrimRight(baseURL, "/") != defaultOpenAIBase {
+			provider = "openai-compatible"
+		}
+	}
+	config := suggestionConfig{provider: provider, model: model, baseURL: baseURL}
+	keyName := "OPENAI_API_KEY"
+	switch provider {
+	case "openai", "openai-compatible":
+		if config.baseURL == "" {
+			config.baseURL = defaultOpenAIBase
+		}
+		if !explicitModel && config.model == "" {
+			config.model = defaultOpenAIModel
+			if provider == "openai-compatible" {
+				config.model = defaultCompatibleModel
+			}
+		}
+	case "anthropic":
+		keyName = "ANTHROPIC_API_KEY"
+		config.workspaceID = os.Getenv("ANTHROPIC_WORKSPACE_ID")
+		if config.baseURL == "" {
+			config.baseURL = defaultAnthropicBase
+		}
+		if !explicitModel && config.model == "" {
+			config.model = defaultAnthropicModel
+		}
+	default:
+		return suggestionConfig{}, fmt.Errorf("unknown suggestion provider %q: use openai, anthropic, or openai-compatible", provider)
+	}
+	config.apiKey = os.Getenv(keyName)
+	if config.apiKey == "" {
+		return suggestionConfig{}, fmt.Errorf("%s is not set", keyName)
+	}
+	if strings.TrimSpace(config.model) == "" {
+		return suggestionConfig{}, fmt.Errorf("suggestion model must not be empty")
+	}
+	return config, nil
+}
+
 // RunCLI is the main entry point for Talia logic.
 func RunCLI(args []string) int {
 	// Load .env file from current directory (silently ignore if not found)
@@ -130,8 +185,9 @@ func RunCLI(args []string) int {
 	suggest := fs.Int("suggest", 0, "Number of domain suggestions to generate (env: TALIA_SUGGEST)")
 	suggestParallel := fs.Int("suggest-parallel", 1, "Number of parallel suggestion requests to run (env: TALIA_SUGGEST_PARALLEL)")
 	prompt := fs.String("prompt", "", "Optional prompt to influence domain suggestions (env: TALIA_PROMPT)")
-	model := fs.String("model", defaultOpenAIModel, "OpenAI model to use for suggestions (env: TALIA_MODEL)")
-	apiBase := fs.String("api-base", "", "Base URL for OpenAI-compatible API (env: OPENAI_API_BASE)")
+	provider := fs.String("provider", "", "Suggestion provider: openai (default), anthropic, or openai-compatible (env: TALIA_PROVIDER)")
+	model := fs.String("model", "", "Suggestion model (default: gpt-6.1-terra for OpenAI, claude-haiku-5-5 for Anthropic, gpt-6-luna for compatibility; env: TALIA_MODEL)")
+	apiBase := fs.String("api-base", "", "Provider API base URL (env: OPENAI_API_BASE or ANTHROPIC_API_BASE)")
 	fresh := fs.Bool("fresh", false, "Don't pass existing domains to AI (allows duplicates, starts fresh)")
 	clean := fs.Bool("clean", false, "Clean and normalize domains in the file (removes invalid domains)")
 	noVerify := fs.Bool("no-verify", false, "Skip WHOIS verification after generating suggestions")
@@ -272,13 +328,6 @@ func RunCLI(args []string) int {
 			fmt.Fprintln(os.Stderr, "Error reading domain file:", err)
 			return 1
 		}
-		baseURL := *apiBase
-		if baseURL == "" {
-			baseURL = os.Getenv("OPENAI_API_BASE")
-		}
-		if baseURL == "" {
-			baseURL = defaultOpenAIBase
-		}
 		// Use env var if --prompt not provided
 		promptText := *prompt
 		if promptText == "" {
@@ -290,6 +339,11 @@ func RunCLI(args []string) int {
 			if envModel := os.Getenv("TALIA_MODEL"); envModel != "" {
 				modelName = envModel
 			}
+		}
+		config, err := resolveSuggestionConfig(*provider, modelName, *apiBase, explicitFlags["provider"], explicitFlags["model"])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error configuring suggestions:", err)
+			return 1
 		}
 		// Read existing domains to avoid duplicates (unless --fresh is set)
 		var existingDomains []string
@@ -311,7 +365,7 @@ func RunCLI(args []string) int {
 
 		fmt.Printf("Starting %d parallel requests (each requesting %d suggestions)...\n", parallelReqs, suggestCount)
 
-		allResults, firstErr := generateSuggestionBatch(os.Getenv("OPENAI_API_KEY"), promptText, suggestCount, modelName, baseURL, existingDomains, parallelReqs)
+		allResults, firstErr := generateProviderSuggestionBatch(config, promptText, suggestCount, existingDomains, parallelReqs)
 
 		if firstErr != nil && len(allResults) == 0 {
 			fmt.Fprintln(os.Stderr, "Error generating suggestions:", firstErr)

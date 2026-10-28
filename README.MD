@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/moxiebytescode/talia?logo=github&sort=semver)](https://github.com/moxiebytescode/talia/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/moxiebytescode/talia.svg)](https://pkg.go.dev/github.com/moxiebytescode/talia)
 
-Talia is a command-line tool for domain name discovery. It combines **AI-powered domain suggestion generation** (via OpenAI, Google Gemini, or any OpenAI-compatible API) with **WHOIS availability checking** to help you find available domain names fast.
+Talia is a command-line tool for domain name discovery. It combines **AI-powered domain suggestion generation** (via OpenAI, Anthropic, or a custom OpenAI-compatible API) with **WHOIS availability checking** to help you find available domain names fast.
 
 **Key capabilities:**
 
@@ -143,20 +143,25 @@ As shown above, `--sleep` changes how long Talia waits between domain checks.
 
 ### Generating Domain Suggestions
 
-Talia can use AI (OpenAI, Gemini, or other OpenAI-compatible APIs) to generate domain name ideas. This feature requires an API key and internet access.
+Choose a suggestion provider with `--provider` or `TALIA_PROVIDER`. This feature requires the selected provider's API key and internet access. Talia loads a `.env` file from the current directory without overriding shell variables.
 
-- **API Key Requirement:** Set the `OPENAI_API_KEY` environment variable with your API key, or add it to a `.env` file in the current directory (Talia loads `.env` automatically).
-- **Network Access:** The machine running Talia must be able to reach the API endpoint.
-- **Alternative APIs:** Use `--api-base` or the `OPENAI_API_BASE` environment variable to point to OpenAI-compatible APIs like Google Gemini.
+| Provider | Default model | API key | Request contract |
+|---|---|---|---|
+| `openai` (default) | `gpt-6.1-terra` | `OPENAI_API_KEY` | Native Responses API with JSON structured output |
+| `anthropic` | `claude-haiku-5-5` | `ANTHROPIC_API_KEY` | Native Messages API with JSON structured output |
+| `openai-compatible` | `gpt-6-luna`; usually override for the endpoint | `OPENAI_API_KEY` | Chat Completions with forced tool calling; best effort |
+
+`--model` overrides the default or `TALIA_MODEL`. `TALIA_MODEL` applies to whichever provider is selected; unset it to use provider defaults. Custom models must support the selected request contract. The native provider defaults are [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) and [Claude Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview). Compatibility mode keeps `gpt-6-luna` because Terra's tool calling requires Responses; custom endpoints usually need their own model name.
+
+Use `--api-base` to override the provider's base URL. Otherwise, OpenAI and compatibility mode read `OPENAI_API_BASE` (default `https://api.openai.com/v1`); Anthropic reads `ANTHROPIC_API_BASE` (default `https://api.anthropic.com/v1`). Set `ANTHROPIC_WORKSPACE_ID` if your Anthropic key requires workspace selection.
 
 Example `.env` file:
 ```
 OPENAI_API_KEY=your-api-key
-OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai
+TALIA_PROVIDER=openai
 WHOIS_SERVER=whois.verisign-grs.com:43
 TALIA_PROMPT=short brandable startup names
 TALIA_SUGGEST=10
-TALIA_MODEL=gemini-3.1-flash-lite
 TALIA_FILE=suggestions.json
 ```
 
@@ -168,12 +173,17 @@ Use the `--suggest` flag to generate domain ideas. If you also provide `--whois`
     # Generate suggestions only (no verification)
     OPENAI_API_KEY=... ./talia --suggest=5 --no-verify --prompt="short brandable names" suggestions.json
 
-    # Use Google Gemini
-    OPENAI_API_KEY=... ./talia --suggest=5 --whois=whois.verisign-grs.com:43 --api-base="https://generativelanguage.googleapis.com/v1beta/openai" --model=gemini-3.1-flash-lite suggestions.json
+    # Generate with Anthropic
+    ANTHROPIC_API_KEY=... ./talia --provider=anthropic --suggest=5 --no-verify --prompt="short brandable names" suggestions.json
+
+    # Use a custom Chat Completions endpoint and its model
+    OPENAI_API_KEY=... ./talia --provider=openai-compatible --api-base="http://localhost:1234/v1" --model=local-model --suggest=5 --no-verify suggestions.json
+
+For existing configurations, a custom `--api-base` or `OPENAI_API_BASE` still selects Chat Completions compatibility mode when neither `--provider` nor `TALIA_PROVIDER` is set. An explicit provider always selects its own request contract, including when its base URL is customized. See the [configuration reference](docs/guides/configuration.md) for precedence and failure behavior.
 
 #### Parallel Suggestion Requests
 
-Use `--suggest-parallel` to fire multiple suggestion requests concurrently. Each request asks the AI for `--suggest` domains, so the total output is multiplied:
+Use `--suggest-parallel` to fire multiple suggestion requests concurrently. Each request asks the AI for `--suggest` domains; the final count can be lower because invalid names, exclusions, and duplicates are removed:
 
     # Run 5 parallel requests, each generating 10 suggestions (up to 50 total)
     ./talia --suggest=10 --suggest-parallel=5 --no-verify suggestions.json
@@ -183,7 +193,7 @@ Use `--suggest-parallel` to fire multiple suggestion requests concurrently. Each
 
 This is useful for generating large batches of ideas quickly. Duplicates across requests are automatically removed when writing to the output file.
 
-**Important:** Talia will instruct the AI to only return domain names ending in `.com`. Talia automatically validates and normalizes all suggestions, fixing common issues like repeated `.com` suffixes (e.g., `example.com.com.com`) and double dots. Domains that can't be normalized to valid `name.com` format are silently discarded.
+Talia normalizes suggestions, fixing common issues such as repeated `.com` suffixes (`example.com.com.com`) and double dots. It removes invalid names, duplicates, and excluded domains. A malformed response or one with no usable suggestions fails that request. Requested counts are best effort; Talia does not retry to fill a shortfall.
 
 **Example output (`suggestions.json`):**
 
@@ -199,7 +209,7 @@ This is useful for generating large batches of ideas quickly. Duplicates across 
 }
 ```
 
-**If the API key is missing or the OpenAI request fails,** Talia will print an error and exit without writing suggestions.
+Missing credentials, refusals, incomplete responses, and other total request failures leave the domain file unchanged. If some parallel requests succeed, Talia keeps their suggestions and reports the failed requests.
 
 **Tip:** You can add new suggestions to an existing grouped file by appending to the `"unverified"` array, then re-running Talia to check them.
 
@@ -359,8 +369,9 @@ Talia's test suite covers:
 - **`--suggest=<n>`**: Generate <n> domain suggestions per request (can also be set via `TALIA_SUGGEST` env var)
 - **`--suggest-parallel=<n>`**: Run <n> suggestion requests in parallel (default 1; can also be set via `TALIA_SUGGEST_PARALLEL` env var)
 - **`--prompt=<text>`**: Text to influence domain suggestion themes (can also be set via `TALIA_PROMPT` env var)
-- **`--model=<name>`**: Model to use when generating suggestions (default: gpt-5-mini; can also be set via `TALIA_MODEL` env var)
-- **`--api-base=<url>`**: Base URL for OpenAI-compatible API (default: https://api.openai.com/v1). Can also be set via `OPENAI_API_BASE` environment variable.
+- **`--provider=<name>`**: Suggestion provider: `openai` (default), `anthropic`, or `openai-compatible` (can also be set via `TALIA_PROVIDER`)
+- **`--model=<name>`**: Suggestion model (default: `gpt-6.1-terra` for OpenAI, `claude-haiku-5-5` for Anthropic, `gpt-6-luna` for compatibility mode; can also be set via `TALIA_MODEL`)
+- **`--api-base=<url>`**: Provider base URL; overrides `OPENAI_API_BASE` or `ANTHROPIC_API_BASE` for the selected provider
 - **`--fresh`**: Don't pass existing domains to AI when generating suggestions (allows duplicates, starts fresh)
 - **`--no-verify`**: Skip WHOIS verification after generating suggestions (by default, suggestions are verified if `--whois` is provided)
 - **`--merge`**: Merge multiple domain files (use with `-o` to specify output file)

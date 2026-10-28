@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Talia is a CLI tool for checking `.com` domain availability via WHOIS and generating domain suggestions via OpenAI-compatible APIs. All source lives in the root `talia` package with a thin binary wrapper at `cmd/talia/main.go`. Uses Conventional Commits (`feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `style`, `revert`).
+Talia is a CLI tool for checking `.com` domain availability via WHOIS and generating domain suggestions via native OpenAI and Anthropic APIs, with best-effort OpenAI-compatible endpoints. All source lives in the root `talia` package with a thin binary wrapper at `cmd/talia/main.go`. Uses Conventional Commits (`feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `style`, `revert`).
 
 ## Quick Commands
 
@@ -14,7 +14,7 @@ go tool golangci-lint run      # lint
 ## Documentation
 
 - [`GLOSSARY.md`](GLOSSARY.md) — domain vocabulary; use these terms
-- [`docs/adr/`](docs/adr/) — architecture decisions (WHOIS detection, tool-calling suggestions, `.com` only, single-file lifecycle, merge semantics, parallelism)
+- [`docs/adr/`](docs/adr/) — architecture decisions (WHOIS detection, suggestion-provider contracts, `.com` only, single-file lifecycle, merge semantics, parallelism)
 - [Development Guide](docs/guides/development.md) — building, linting, CI, releases
 - [Configuration Reference](docs/guides/configuration.md) — flags, env vars, `.env`, and behavior notes
 - [Testing Guide](docs/guides/testing.md) — test architecture, mocking, and isolation

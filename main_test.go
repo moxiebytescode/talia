@@ -20,9 +20,11 @@ import (
 func TestMain(m *testing.M) {
 	// Disable .env file loading for all tests
 	skipEnvFile = true
-	// Clear any existing OpenAI API key to prevent accidental API calls
-	_ = os.Unsetenv("OPENAI_API_KEY")
-	_ = os.Unsetenv("OPENAI_API_BASE")
+	// Clear provider settings so shell credentials cannot trigger real API calls
+	// or change which wire protocol the local fake servers receive.
+	for _, key := range []string{"OPENAI_API_KEY", "OPENAI_API_BASE", "ANTHROPIC_API_KEY", "ANTHROPIC_API_BASE", "ANTHROPIC_WORKSPACE_ID", "TALIA_PROVIDER", "TALIA_MODEL"} {
+		_ = os.Unsetenv(key)
+	}
 	os.Exit(m.Run())
 }
 
