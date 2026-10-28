@@ -96,8 +96,8 @@ Talia can generate domain name suggestions using AI, check domain availability v
 
 ### Prerequisites
 
-- Go 1.27.1 or later (as declared in `go.mod`; with the default `GOTOOLCHAIN=auto`, an older Go downloads it automatically)
-- golangci-lint v2.14.0 (declared as a Go tool; auto-downloads on first use)
+- Go 1.27.3 or later (as declared in `go.mod`; with the default `GOTOOLCHAIN=auto`, an older Go downloads it automatically)
+- golangci-lint v2.15.0 (declared as a Go tool; auto-downloads on first use)
 
 ### Steps
 
