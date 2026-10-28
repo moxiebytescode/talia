@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1389,78 +1390,200 @@ func TestRunCLIGroupedInput_Overwrite(t *testing.T) {
 	}
 }
 
-func TestMainGroupedFileWithUnverifiedInput_SeparateOutput(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedFileWithUnverifiedInput_SeparateOutput", flag.ContinueOnError)
+func TestRunCLI_GroupedInputSeparateOutputMergesOnlyFreshChecks(t *testing.T) {
+	t.Setenv("TALIA_LIGHTSPEED", "")
+	for _, workers := range []string{"", "max"} {
+		t.Run("lightspeed="+workers, func(t *testing.T) {
+			input := writeGroupedFixture(t, ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "input-only-available.com", Reason: ReasonNoMatch},
+					{Domain: "held.com", Reason: ReasonNoMatch, Log: "stale input result"},
+				},
+				Unavailable: []GroupedDomain{
+					{Domain: "input-only-unavailable.com", Reason: ReasonTaken},
+					{Domain: "kept.com", Reason: ReasonTaken, Log: "stale input result"},
+				},
+				Unverified: []DomainRecord{
+					{Domain: "new-available.com"},
+					{Domain: "new-unavailable.com"},
+					{Domain: "released.com"},
+					{Domain: "registered.com"},
+					{Domain: "checked.com"},
+					{Domain: "rechecked.com"},
+				},
+			})
+			original, err := os.ReadFile(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := writeGroupedFixture(t, ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "kept.com", Reason: ReasonNoMatch, Log: "keep available log"},
+					{Domain: "registered.com", Reason: ReasonNoMatch},
+				},
+				Unavailable: []GroupedDomain{
+					{Domain: "held.com", Reason: ReasonTaken, Log: "keep unavailable log"},
+					{Domain: "released.com", Reason: ReasonTaken},
+					{Domain: "rechecked.com", Reason: ReasonError, Log: "Error: timeout"},
+				},
+				Unverified: []DomainRecord{
+					{Domain: "waiting1.com"},
+					{Domain: "checked.com"},
+					{Domain: "waiting2.com", Log: "suggested"},
+				},
+			})
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go func() {
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					query, _ := bufio.NewReader(conn).ReadString('\n')
+					domain := strings.TrimSpace(query)
+					if domain == "new-available.com" || domain == "released.com" || domain == "checked.com" {
+						_, _ = io.WriteString(conn, "No match for "+domain+"\n")
+					} else {
+						_, _ = io.WriteString(conn, "Domain Name: "+domain+"\n")
+					}
+					_ = conn.Close()
+				}
+			}()
 
-	// Input: ExtendedGroupedData with unverified
-	ext := ExtendedGroupedData{
-		Available: []GroupedDomain{
-			{Domain: "old-avail.com", Reason: ReasonNoMatch},
-		},
-		Unavailable: []GroupedDomain{
-			{Domain: "old-unavail.com", Reason: ReasonTaken},
-		},
-		Unverified: []DomainRecord{
-			{Domain: "need-check.com"},
-		},
-	}
-	inputFile, _ := os.CreateTemp("", "unverified_separate_input_*.json")
-	defer helperRemove(t, inputFile.Name())
-	if err := json.NewEncoder(inputFile).Encode(ext); err != nil {
-		t.Fatalf("encode ext JSON: %v", err)
-	}
-	helperClose(t, inputFile, "inputFile close for unverified separate output test")
-
-	// Output file (distinct from input)
-	outFile, _ := os.CreateTemp("", "unverified_separate_out_*.json")
-	outFileName := outFile.Name()
-	helperClose(t, outFile, "outFile close for unverified separate output test")
-	defer helperRemove(t, outFileName)
-
-	// WHOIS => domain found => reason=TAKEN
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer helperClose(t, ln, "listener close") // Changed from ln.Close()
-	go func() {
-		c, _ := ln.Accept()
-		_, _ = io.Copy(io.Discard, c)
-		_, _ = io.WriteString(c, "Domain Name: found-something\n")
-		helperClose(nil, c, "conn close")
-	}()
-
-	// Run with grouped-output + separate --output-file
-	stdout, stderr := captureOutput(t, func() {
-		code := RunCLI([]string{
-			"--grouped-output",
-			"--output-file=" + outFileName,
-			"--whois=" + ln.Addr().String(),
-			"--sleep=0s",
-			inputFile.Name(),
+			want := ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "kept.com", Reason: ReasonNoMatch, Log: "keep available log"},
+					{Domain: "new-available.com", Reason: ReasonNoMatch},
+					{Domain: "released.com", Reason: ReasonNoMatch},
+					{Domain: "checked.com", Reason: ReasonNoMatch},
+				},
+				Unavailable: []GroupedDomain{
+					{Domain: "held.com", Reason: ReasonTaken, Log: "keep unavailable log"},
+					{Domain: "rechecked.com", Reason: ReasonTaken},
+					{Domain: "new-unavailable.com", Reason: ReasonTaken},
+					{Domain: "registered.com", Reason: ReasonTaken},
+				},
+				Unverified: []DomainRecord{{Domain: "waiting1.com"}, {Domain: "waiting2.com", Log: "suggested"}},
+			}
+			var previous []byte
+			for run := range 2 {
+				var code int
+				_, stderr := captureOutput(t, func() {
+					code = RunCLI([]string{
+						"--whois=" + ln.Addr().String(), "--sleep=0", "--suggest=0",
+						"--lightspeed=" + workers, "--grouped-output", "--output-file=" + output, input,
+					})
+				})
+				if code != 0 {
+					t.Fatalf("run %d: exit code = %d, stderr = %s", run, code, stderr)
+				}
+				if got := readGroupedFile(t, output); !reflect.DeepEqual(got, want) {
+					t.Errorf("run %d: grouped output = %+v, want %+v", run, got, want)
+				}
+				data, err := os.ReadFile(output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if previous != nil && !bytes.Equal(data, previous) {
+					t.Errorf("run %d changed output despite identical checks", run)
+				}
+				previous = data
+			}
+			if unchanged, err := os.ReadFile(input); err != nil || !bytes.Equal(unchanged, original) {
+				t.Errorf("input changed: read error = %v, data = %s", err, unchanged)
+			}
 		})
-		if code != 0 {
-			t.Errorf("Expected exit=0, got %d", code)
-		}
+	}
+}
+
+func TestRunCLI_GroupedInputSeparateOutputDestinationFormats(t *testing.T) {
+	for _, format := range []string{"missing", "empty", "array"} {
+		t.Run(format, func(t *testing.T) {
+			input := writeGroupedFixture(t, ExtendedGroupedData{
+				Available:   []GroupedDomain{{Domain: "input-only-available.com", Reason: ReasonNoMatch}},
+				Unavailable: []GroupedDomain{{Domain: "input-only-unavailable.com", Reason: ReasonTaken}},
+				Unverified:  []DomainRecord{{Domain: "checked.com"}},
+			})
+			output := filepath.Join(t.TempDir(), "out.json")
+			want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "checked.com", Reason: ReasonNoMatch}}}
+			if format != "missing" {
+				raw := ""
+				if format == "array" {
+					raw = `[{"domain":"kept.com","available":true,"reason":"NO_MATCH"}]`
+					want.Available = []GroupedDomain{
+						{Domain: "kept.com", Reason: ReasonNoMatch},
+						{Domain: "checked.com", Reason: ReasonNoMatch},
+					}
+				}
+				if err := os.WriteFile(output, []byte(raw), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			addr, _ := startCountingWhois(t)
+			var code int
+			_, stderr := captureOutput(t, func() {
+				code = RunCLI([]string{
+					"--whois=" + addr, "--sleep=0", "--suggest=0", "--grouped-output", "--output-file=" + output, input,
+				})
+			})
+			if code != 0 {
+				t.Fatalf("exit code = %d, stderr = %s", code, stderr)
+			}
+			if got := readGroupedFile(t, output); !reflect.DeepEqual(got, want) {
+				t.Errorf("grouped output = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestRunCLI_GroupedInputSeparateOutputWithNoFreshChecks(t *testing.T) {
+	input := writeGroupedFixture(t, ExtendedGroupedData{
+		Available:   []GroupedDomain{{Domain: "input-only.com", Reason: ReasonNoMatch}},
+		Unavailable: []GroupedDomain{{Domain: "kept.com", Reason: ReasonTaken}},
 	})
+	want := ExtendedGroupedData{
+		Available:  []GroupedDomain{{Domain: "kept.com", Reason: ReasonNoMatch}},
+		Unverified: []DomainRecord{{Domain: "waiting.com"}},
+	}
+	output := writeGroupedFixture(t, want)
+	addr, _ := startCountingWhois(t)
+	var code int
+	_, stderr := captureOutput(t, func() {
+		code = RunCLI([]string{
+			"--whois=" + addr, "--suggest=0", "--grouped-output", "--output-file=" + output, input,
+		})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr)
+	}
+	if got := readGroupedFile(t, output); !reflect.DeepEqual(got, want) {
+		t.Errorf("grouped output = %+v, want %+v", got, want)
+	}
+}
 
-	// Check that we did NOT see "overwrote original file" message
-	// Instead we expect "wrote results to: outFileName"
-	if strings.Contains(stdout, "overwrote original file") {
-		t.Error("Expected separate-file message, got overwrite message!")
+func TestRunCLI_GroupedInputSeparateOutputRejectsInvalidDestination(t *testing.T) {
+	input := writeGroupedFixture(t, ExtendedGroupedData{Unverified: []DomainRecord{{Domain: "checked.com"}}})
+	output := filepath.Join(t.TempDir(), "out.json")
+	original := []byte(`{"available":`)
+	if err := os.WriteFile(output, original, 0644); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "wrote results to:") {
-		t.Errorf("Missing the 'wrote results to:' line. stdout=%s\nstderr=%s", stdout, stderr)
+	addr, _ := startCountingWhois(t)
+	var code int
+	_, stderr := captureOutput(t, func() {
+		code = RunCLI([]string{
+			"--whois=" + addr, "--sleep=0", "--suggest=0", "--grouped-output", "--output-file=" + output, input,
+		})
+	})
+	if code != 1 || !strings.Contains(stderr, "parse grouped file") {
+		t.Errorf("exit code = %d, stderr = %q; want 1 and a parse error", code, stderr)
 	}
-
-	// The outFile should now contain unverified => gone, domain => "need-check.com" in .Unavailable
-	data, _ := os.ReadFile(outFileName)
-	var final ExtendedGroupedData
-	if err := json.Unmarshal(data, &final); err != nil {
-		t.Fatalf("unmarshal out: %v", err)
-	}
-	if len(final.Unverified) != 0 {
-		t.Errorf("Expected unverified=0, got %d", len(final.Unverified))
-	}
-	if len(final.Unavailable) != 2 { // old + new
-		t.Errorf("Expected 2 in .Unavailable, got %d", len(final.Unavailable))
+	if data, err := os.ReadFile(output); err != nil || !bytes.Equal(data, original) {
+		t.Errorf("invalid destination changed: read error = %v, data = %s", err, data)
 	}
 }
 
