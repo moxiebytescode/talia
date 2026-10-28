@@ -81,6 +81,17 @@ Defined in `.github/workflows/release.yml`. Runs on pushes to `main`:
 - Auto-generates changelog from conventional commits
 - Creates release PRs and tags with `v` prefix
 
+Release automation authenticates with the repository Actions secret `RELEASE_PLEASE_TOKEN`, following release-please's [documented token setup](https://github.com/googleapis/release-please-action#github-credentials).
+
+Create a fine-grained personal access token with:
+
+- Resource owner: `moxiebytescode`.
+- Repository access: **Only select repositories**, with `talia` selected.
+- Repository permissions: **Contents**, **Issues**, and **Pull requests** set to **Read and write**. Metadata read access is included automatically.
+- An expiration date; replace the secret before the token expires or if its owner loses repository access.
+
+Store the token in `RELEASE_PLEASE_TOKEN` before enabling the workflow. It lets CI run automatically on release PRs without the approval prompt associated with the built-in `GITHUB_TOKEN`; see [Triggering a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). The workflow's built-in token retains only contents read access.
+
 ## Related Documentation
 
 - [Testing Guide](testing.md)
