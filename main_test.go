@@ -1106,36 +1106,52 @@ func TestWriteGroupedFile_ParseArrayFallback(t *testing.T) {
 	}
 }
 
-// NEW TEST #1: Directly test ConvertArrayToGrouped
+// TestConvertArrayToGrouped verifies check metadata, last-occurrence precedence,
+// and the input order of retained records within each bucket.
 func TestConvertArrayToGrouped(t *testing.T) {
-	arr := []DomainRecord{
-		{Domain: "test1.com", Available: true, Reason: ReasonNoMatch, Log: "log1"},
-		{Domain: "test2.com", Available: false, Reason: ReasonTaken, Log: "log2"},
-		{Domain: "test3.com", Available: false, Reason: ReasonError, Log: "log3"},
-	}
-	g := ConvertArrayToGrouped(arr)
-	if len(g.Available) != 1 {
-		t.Errorf("expected 1 in available, got %d", len(g.Available))
-	}
-	if len(g.Unavailable) != 2 {
-		t.Errorf("expected 2 in unavailable, got %d", len(g.Unavailable))
-	}
-
-	if g.Available[0].Domain != "test1.com" || g.Available[0].Log != "log1" {
-		t.Error("test1.com should be in available with correct log")
-	}
-
-	var foundTest2, foundTest3 bool
-	for _, u := range g.Unavailable {
-		if u.Domain == "test2.com" && u.Reason == ReasonTaken && u.Log == "log2" {
-			foundTest2 = true
-		}
-		if u.Domain == "test3.com" && u.Reason == ReasonError && u.Log == "log3" {
-			foundTest3 = true
-		}
-	}
-	if !foundTest2 || !foundTest3 {
-		t.Error("Did not find test2.com or test3.com in unavailable list with correct reason/log")
+	for _, tc := range []struct {
+		name  string
+		input []DomainRecord
+		want  GroupedData
+	}{
+		{
+			name: "unique results retain metadata",
+			input: []DomainRecord{
+				{Domain: "test1.com", Available: true, Reason: ReasonNoMatch, Log: "log1"},
+				{Domain: "test2.com", Reason: ReasonTaken, Log: "log2"},
+				{Domain: "test3.com", Reason: ReasonError, Log: "log3"},
+			},
+			want: GroupedData{
+				Available: []GroupedDomain{{Domain: "test1.com", Reason: ReasonNoMatch, Log: "log1"}},
+				Unavailable: []GroupedDomain{
+					{Domain: "test2.com", Reason: ReasonTaken, Log: "log2"},
+					{Domain: "test3.com", Reason: ReasonError, Log: "log3"},
+				},
+			},
+		},
+		{
+			name: "last duplicate decides bucket before partitioning",
+			input: []DomainRecord{
+				{Domain: "FOO.COM", Reason: ReasonError, Log: "stale error"},
+				{Domain: "bar.com", Available: true, Reason: ReasonNoMatch, Log: "stale available"},
+				{Domain: "third.com", Available: true, Reason: ReasonNoMatch, Log: "keep"},
+				{Domain: "foo.com", Available: true, Reason: ReasonNoMatch, Log: "fresh available"},
+				{Domain: " BAR.COM.com ", Reason: ReasonTaken, Log: "fresh taken"},
+			},
+			want: GroupedData{
+				Available: []GroupedDomain{
+					{Domain: "third.com", Reason: ReasonNoMatch, Log: "keep"},
+					{Domain: "foo.com", Reason: ReasonNoMatch, Log: "fresh available"},
+				},
+				Unavailable: []GroupedDomain{{Domain: " BAR.COM.com ", Reason: ReasonTaken, Log: "fresh taken"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConvertArrayToGrouped(tc.input); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("grouped results = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

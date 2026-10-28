@@ -72,9 +72,18 @@ func mergeGrouped(existing, newest GroupedData) GroupedData {
 }
 
 // ConvertArrayToGrouped turns an array of DomainRecord into GroupedData.
+// Records with the same normalized identity retain only their last occurrence,
+// so bucket assignment cannot make an earlier failure override a later success.
 func ConvertArrayToGrouped(arr []DomainRecord) GroupedData {
 	var gd GroupedData
-	for _, rec := range arr {
+	last := make(map[string]int, len(arr))
+	for i, rec := range arr {
+		last[groupedDomainKey(rec.Domain)] = i
+	}
+	for i, rec := range arr {
+		if last[groupedDomainKey(rec.Domain)] != i {
+			continue
+		}
 		gDom := GroupedDomain{
 			Domain: rec.Domain,
 			Reason: rec.Reason,

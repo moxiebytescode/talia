@@ -1,12 +1,96 @@
 package talia
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// TestRunCLIGroupedOutputKeepsLastDuplicateCheck verifies repeated normalized
+// domains retain the final input-ordered check before results enter buckets,
+// across both input shapes and both in-place and separate grouped destinations.
+func TestRunCLIGroupedOutputKeepsLastDuplicateCheck(t *testing.T) {
+	for _, mode := range []struct {
+		name              string
+		grouped, separate bool
+	}{
+		{"array in place", false, false},
+		{"array separate", false, true},
+		{"grouped in place", true, false},
+		{"grouped separate", true, true},
+	} {
+		for _, laterAvailable := range []bool{true, false} {
+			outcome := "later error"
+			if laterAvailable {
+				outcome = "later available"
+			}
+			t.Run(mode.name+"/"+outcome, func(t *testing.T) {
+				ln, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = ln.Close() })
+				go func() {
+					for {
+						conn, err := ln.Accept()
+						if err != nil {
+							return
+						}
+						go func(c net.Conn) {
+							defer func() { _ = c.Close() }()
+							domain, _ := bufio.NewReader(c).ReadString('\n')
+							if strings.TrimSpace(domain) == "example.com" {
+								_, _ = io.WriteString(c, "No match for example.com")
+							}
+						}(conn)
+					}
+				}()
+				records := []DomainRecord{{Domain: "example.com"}, {Domain: "Example.com"}}
+				want := ExtendedGroupedData{Unavailable: []GroupedDomain{{Domain: "Example.com", Reason: ReasonError, Log: "Error: empty WHOIS response"}}}
+				if laterAvailable {
+					records[0], records[1] = records[1], records[0]
+					want = ExtendedGroupedData{Available: []GroupedDomain{{Domain: "example.com", Reason: ReasonNoMatch}}}
+				}
+				var input any = records
+				if mode.grouped {
+					input = ExtendedGroupedData{
+						Unavailable: []GroupedDomain{{Domain: "EXAMPLE.COM", Reason: ReasonTaken, Log: "stale"}},
+						Unverified:  records,
+					}
+				}
+				path := writeGroupedFixture(t, input)
+				original, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				output := path
+				args := []string{"--whois=" + ln.Addr().String(), "--sleep=0", "--suggest=0", "--lightspeed=2", "--grouped-output"}
+				if mode.separate {
+					output = filepath.Join(t.TempDir(), "output.json")
+					args = append(args, "--output-file="+output)
+				}
+				if code := RunCLI(append(args, path)); code != 0 {
+					t.Fatalf("exit = %d", code)
+				}
+				if got := readGroupedFile(t, output); !reflect.DeepEqual(got, want) {
+					t.Fatalf("last check was lost: %#v, want %#v", got, want)
+				}
+				if mode.separate {
+					raw, err := os.ReadFile(path)
+					if err != nil || string(raw) != string(original) {
+						t.Fatalf("separate output changed input: %q, %v", raw, err)
+					}
+				}
+			})
+		}
+	}
+}
 
 // TestRunCLIGroupedRechecksReplaceStaleResults verifies that repeated unverified
 // entries produce one fresh result and replace a conflicting stale bucket.
