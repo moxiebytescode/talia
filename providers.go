@@ -20,6 +20,18 @@ type suggestionConfig struct {
 	workspaceID string
 }
 
+// ProviderStatusError reports an unsuccessful provider HTTP response without
+// retaining its response body. Callers can inspect it with errors.As.
+type ProviderStatusError struct {
+	Provider   string
+	StatusCode int
+}
+
+// Error formats the provider and status code, preserving legacy compatibility labels.
+func (e *ProviderStatusError) Error() string {
+	return fmt.Sprintf("%s status %d", requestProviderName(e.Provider), e.StatusCode)
+}
+
 // suggestionJSONSchema requires an unverified array of closed objects with domain strings.
 func suggestionJSONSchema() map[string]any {
 	return map[string]any{
@@ -99,7 +111,7 @@ func requestSuggestions(config suggestionConfig, path string, body any, client h
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s status %d", requestProviderName(config.provider), resp.StatusCode)
+		return &ProviderStatusError{Provider: config.provider, StatusCode: resp.StatusCode}
 	}
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(result); err != nil {
@@ -295,7 +307,7 @@ func generateChatCompletion(config suggestionConfig, userContent string, client 
 	if choice.Message.Refusal != nil {
 		return "", fmt.Errorf("openai-compatible endpoint refused the suggestion request")
 	}
-	if choice.FinishReason != "" && choice.FinishReason != "tool_calls" {
+	if choice.FinishReason != "" && choice.FinishReason != "tool_calls" && choice.FinishReason != "stop" {
 		return "", fmt.Errorf("openai-compatible tool response did not complete")
 	}
 	if len(choice.Message.ToolCalls) == 0 {

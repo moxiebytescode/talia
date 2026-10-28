@@ -3,6 +3,7 @@ package talia
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -226,21 +227,30 @@ func TestNativeSuggestionProvidersValidateStructuredOutput(t *testing.T) {
 	}
 }
 
-// TestSuggestionProviderHTTPErrorDoesNotExposeBody verifies HTTP failures retain
-// the status code without exposing credentials or provider response text.
+// TestSuggestionProviderHTTPErrorDoesNotExposeBody verifies HTTP failures expose
+// typed provider/status information without credentials or provider response text.
 func TestSuggestionProviderHTTPErrorDoesNotExposeBody(t *testing.T) {
 	t.Parallel()
 	for _, provider := range []string{"openai", "anthropic", "openai-compatible"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = io.WriteString(w, `{"error":{"message":"secret-key sensitive-provider-detail"}}`)
-			}))
-			t.Cleanup(srv.Close)
-			_, err := generateProviderSuggestions(suggestionConfig{provider: provider, apiKey: "secret-key", model: "test-model", baseURL: srv.URL}, "", 1, nil, srv.Client())
-			if err == nil || !strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "secret-key") || strings.Contains(err.Error(), "sensitive-provider-detail") {
-				t.Fatalf("unsafe or missing HTTP error: %v", err)
+			for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+				t.Run(fmt.Sprint(status), func(t *testing.T) {
+					t.Parallel()
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.WriteHeader(status)
+						_, _ = io.WriteString(w, `{"error":{"message":"secret-key sensitive-provider-detail"}}`)
+					}))
+					t.Cleanup(srv.Close)
+					_, err := generateProviderSuggestions(suggestionConfig{provider: provider, apiKey: "secret-key", model: "test-model", baseURL: srv.URL}, "", 1, nil, srv.Client())
+					if err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "secret-key") || strings.Contains(err.Error(), "sensitive-provider-detail") {
+						t.Fatalf("unsafe or missing HTTP error: %v", err)
+					}
+					var statusErr *ProviderStatusError
+					if !errors.As(err, &statusErr) || statusErr.Provider != provider || statusErr.StatusCode != status {
+						t.Fatalf("missing typed provider/status information: %v", err)
+					}
+				})
 			}
 		})
 	}
@@ -315,6 +325,43 @@ func TestCompatibleSuggestionModelToolRequirements(t *testing.T) {
 			got, err := GenerateDomainSuggestions("test-key", "", 1, tc.model, srv.URL, nil)
 			if err != nil || len(got) != 1 || got[0].Domain != "a.com" {
 				t.Fatalf("suggestions = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+// TestCompatibleSuggestionFinishReasons accepts complete compatibility responses
+// while requiring one valid suggestion tool call, including for the stop reason.
+func TestCompatibleSuggestionFinishReasons(t *testing.T) {
+	t.Parallel()
+	const validTool = `{"function":{"name":"suggest_domains","arguments":"{\"unverified\":[{\"domain\":\"a.com\"}]}"}}`
+	for _, tc := range []struct {
+		name, reason, toolCalls, wantError string
+	}{
+		{"stop with valid tool", "stop", "[" + validTool + "]", ""},
+		{"tool_calls with valid tool", "tool_calls", "[" + validTool + "]", ""},
+		{"omitted reason with valid tool", "", "[" + validTool + "]", ""},
+		{"stop without tool", "stop", "[]", "no tool calls"},
+		{"stop with wrong tool", "stop", `[{"function":{"name":"other_tool","arguments":"{}"}}]`, "unexpected suggestion tool"},
+		{"stop with multiple tools", "stop", "[" + validTool + "," + validTool + "]", "exactly one"},
+		{"stop with malformed arguments", "stop", `[{"function":{"name":"suggest_domains","arguments":"not-json"}}]`, "unmarshal structured output"},
+		{"truncated tool", "length", "[" + validTool + "]", "did not complete"},
+		{"filtered tool", "content_filter", "[" + validTool + "]", "did not complete"},
+		{"unknown finish reason", "unknown", "[" + validTool + "]", "did not complete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"choices":[{"finish_reason":%q,"message":{"tool_calls":%s}}]}`, tc.reason, tc.toolCalls)
+			}))
+			t.Cleanup(srv.Close)
+			got, err := GenerateDomainSuggestions("test-key", "", 1, "test-model", srv.URL, nil)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || got != nil {
+					t.Fatalf("suggestions=%#v error=%v; want %q", got, err, tc.wantError)
+				}
+			} else if err != nil || len(got) != 1 || got[0].Domain != "a.com" {
+				t.Fatalf("complete tool call rejected: suggestions=%#v error=%v", got, err)
 			}
 		})
 	}
