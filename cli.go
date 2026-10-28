@@ -236,6 +236,7 @@ func RunCLIGroupedInput(
 
 	results := checkDomains(domainNames, whoisServer, sleep, verbose, workers)
 
+	newest := GroupedData{}
 	for _, res := range results {
 		gd := GroupedDomain{
 			Domain: res.Domain,
@@ -243,22 +244,32 @@ func RunCLIGroupedInput(
 			Log:    res.Log,
 		}
 		if res.Avail {
-			ext.Available = append(ext.Available, gd)
+			newest.Available = append(newest.Available, gd)
 		} else {
-			ext.Unavailable = append(ext.Unavailable, gd)
+			newest.Unavailable = append(newest.Unavailable, gd)
 		}
 	}
 
-	ext.Unverified = nil
+	if groupedOutput && outputFile != "" {
+		// Only fresh checks may replace results already in the output file.
+		if err := WriteGroupedFile(finalOutputFile, newest); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing grouped JSON to %s: %v\n", finalOutputFile, err)
+			return 1
+		}
+	} else {
+		ext.Available = append(ext.Available, newest.Available...)
+		ext.Unavailable = append(ext.Unavailable, newest.Unavailable...)
+		ext.Unverified = nil
 
-	out, err := json.MarshalIndent(ext, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling grouped JSON: %v\n", err)
-		return 1
-	}
-	if err := os.WriteFile(finalOutputFile, out, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing grouped JSON to %s: %v\n", finalOutputFile, err)
-		return 1
+		out, err := json.MarshalIndent(ext, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling grouped JSON: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(finalOutputFile, out, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing grouped JSON to %s: %v\n", finalOutputFile, err)
+			return 1
+		}
 	}
 
 	if finalOutputFile == inputPath {

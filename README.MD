@@ -292,7 +292,7 @@ Talia now supports using a grouped file with an `"unverified"` array as input. T
 }
 ```
 
-When Talia processes this file:
+When Talia processes this file in place (without a separate `--output-file`):
 
 1. It checks all domains in the `"unverified"` array
 2. Moves them into either `"available"` or `"unavailable"` based on WHOIS results
@@ -300,6 +300,8 @@ When Talia processes this file:
 4. Preserves existing domains in the `"available"` and `"unavailable"` arrays
 
 This allows you to incrementally add and verify new domains while maintaining your existing results.
+
+With `--grouped-output --output-file=somefile.json`, Talia leaves the input file unchanged and merges only the newly checked results into `somefile.json`. The input's existing `available` and `unavailable` entries are not copied. Existing results in the output file are kept unless a fresh check replaces them, and its `unverified` domains are kept unless they were just checked. See the [merging behavior](docs/guides/configuration.md#merging) for ordering rules.
 
 ### Static Analysis (golangci‑lint)
 
