@@ -7,6 +7,15 @@ import (
 	"os"
 )
 
+// groupedDomainKey compares valid domains by normalized identity without
+// rewriting stored records or collapsing distinct invalid domains into one key.
+func groupedDomainKey(raw string) string {
+	if normalized := normalizeDomain(raw); normalized != "" {
+		return normalized
+	}
+	return raw
+}
+
 // mergeGrouped merges new grouped results into existing grouped data, deduplicating by domain.
 // The newest result for a domain wins. Existing entries keep their position when re-checked
 // into the same bucket; new domains, and domains that change bucket, are appended in input
@@ -19,27 +28,28 @@ func mergeGrouped(existing, newest GroupedData) GroupedData {
 	}
 	latest := make(map[string]bucketedEntry)
 	for _, gd := range existing.Available {
-		latest[gd.Domain] = bucketedEntry{gd, true}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, true}
 	}
 	for _, gd := range existing.Unavailable {
-		latest[gd.Domain] = bucketedEntry{gd, false}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, false}
 	}
 	for _, gd := range newest.Available {
-		latest[gd.Domain] = bucketedEntry{gd, true}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, true}
 	}
 	for _, gd := range newest.Unavailable {
-		latest[gd.Domain] = bucketedEntry{gd, false}
+		latest[groupedDomainKey(gd.Domain)] = bucketedEntry{gd, false}
 	}
 
 	// Emit domains in order of first appearance within their final bucket.
 	out := GroupedData{}
 	emitted := make(map[string]bool)
 	emit := func(gd GroupedDomain, available bool) {
-		r := latest[gd.Domain]
-		if emitted[gd.Domain] || r.available != available {
+		key := groupedDomainKey(gd.Domain)
+		r := latest[key]
+		if emitted[key] || r.available != available {
 			return
 		}
-		emitted[gd.Domain] = true
+		emitted[key] = true
 		if available {
 			out.Available = append(out.Available, r.rec)
 		} else {
@@ -124,13 +134,13 @@ func applyGroupedChecks(existing ExtendedGroupedData, newest GroupedData) Extend
 	checked := make(map[string]bool)
 	for _, bucket := range [][]GroupedDomain{newest.Available, newest.Unavailable} {
 		for _, rec := range bucket {
-			checked[rec.Domain] = true
+			checked[groupedDomainKey(rec.Domain)] = true
 		}
 	}
 	merged := mergeGrouped(GroupedData{Available: existing.Available, Unavailable: existing.Unavailable}, newest)
 	out := ExtendedGroupedData{Available: merged.Available, Unavailable: merged.Unavailable}
 	for _, rec := range existing.Unverified {
-		if !checked[rec.Domain] {
+		if !checked[groupedDomainKey(rec.Domain)] {
 			out.Unverified = append(out.Unverified, rec)
 		}
 	}

@@ -118,6 +118,8 @@ Merge and export accept both array and grouped files. Array records are interpre
 
 Writing to an existing `--output-file` keeps the order of its entries: a re-checked domain is updated where it is, and new domains, or domains that change bucket, are added at the end. Any `unverified` domains in the output file are kept, except those that were just checked.
 
+Grouped updates compare valid domains by normalized identity, so spelling variants such as `" Example.COM "` and `"example.com"` refer to the same domain. Stored spelling and metadata come from the retained record; identity comparisons do not rewrite them. Invalid names keep their distinct raw identities until explicitly cleaned.
+
 For grouped input, `--grouped-output --output-file` merges only the results of checking the input's `unverified` bucket. The input's existing `available` and `unavailable` entries are not copied to the output file, so older input results cannot replace newer destination results. The input file stays unchanged when the output path is separate. Without these flags, checks update the input file in place and keep its existing results.
 
 ## Related Documentation

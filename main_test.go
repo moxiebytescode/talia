@@ -1062,6 +1062,8 @@ func TestWriteGroupedFile_NewFile(t *testing.T) {
 	}
 }
 
+// TestWriteGroupedFile_ParseArrayFallback verifies existing array results survive
+// conversion when fresh grouped results are added.
 func TestWriteGroupedFile_ParseArrayFallback(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "array_fallback_*.json")
 	if err != nil {
@@ -1723,6 +1725,7 @@ func TestRunCLIDomainArray_GroupedOverwriteWriteError(t *testing.T) {
 	}
 }
 
+// TestRunCLIGroupedInput_Verbose verifies verbose grouped checks retain WHOIS text.
 func TestRunCLIGroupedInput_Verbose(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1756,6 +1759,8 @@ func TestRunCLIGroupedInput_Verbose(t *testing.T) {
 	}
 }
 
+// TestWriteGroupedFile_ReadError verifies an unreadable destination is reported
+// as a read error before grouped results can be written.
 func TestWriteGroupedFile_ReadError(t *testing.T) {
 	dir := t.TempDir()
 	err := WriteGroupedFile(dir, GroupedData{Available: []GroupedDomain{{Domain: "x.com"}}})

@@ -15,6 +15,8 @@ import (
 	"testing"
 )
 
+// TestGenerateDomainSuggestionsValidatesToolAndEndpoint verifies request method,
+// authorization, trailing-slash handling, and rejection of an unexpected tool.
 func TestGenerateDomainSuggestionsValidatesToolAndEndpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name, tool, suffix string
@@ -47,6 +49,8 @@ func TestGenerateDomainSuggestionsValidatesToolAndEndpoint(t *testing.T) {
 	}
 }
 
+// TestRunCLISuggestionBatchFailures verifies partial successes are preserved
+// and deduplicated, while total failure leaves the original domain file intact.
 func TestRunCLISuggestionBatchFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -117,6 +121,8 @@ func TestGenerateDomainSuggestionsSuccess(t *testing.T) {
 	}
 }
 
+// TestGenerateDomainSuggestionsHTTPError verifies non-success HTTP responses
+// are returned as suggestion errors.
 func TestGenerateDomainSuggestionsHTTPError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +136,8 @@ func TestGenerateDomainSuggestionsHTTPError(t *testing.T) {
 	}
 }
 
+// TestRunCLISuggest verifies the CLI writes returned suggestions as unverified
+// records through the configured local HTTP endpoint.
 func TestRunCLISuggest(t *testing.T) {
 	// Environment variables are process-wide, so this CLI test is not parallel.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +204,8 @@ func TestGenerateDomainSuggestionsRequestError(t *testing.T) {
 	}
 }
 
+// TestGenerateDomainSuggestionsDecodeError verifies malformed HTTP response JSON
+// is reported before tool arguments can be read.
 func TestGenerateDomainSuggestionsDecodeError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +219,8 @@ func TestGenerateDomainSuggestionsDecodeError(t *testing.T) {
 	}
 }
 
+// TestGenerateDomainSuggestionsNoChoices verifies a response without choices
+// cannot be mistaken for a successful suggestion list.
 func TestGenerateDomainSuggestionsNoChoices(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +234,8 @@ func TestGenerateDomainSuggestionsNoChoices(t *testing.T) {
 	}
 }
 
+// TestGenerateDomainSuggestionsNoToolCalls verifies the selected choice must
+// contain a tool call rather than ordinary message text.
 func TestGenerateDomainSuggestionsNoToolCalls(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +249,8 @@ func TestGenerateDomainSuggestionsNoToolCalls(t *testing.T) {
 	}
 }
 
+// TestGenerateDomainSuggestionsUnmarshalError verifies malformed tool arguments
+// are returned as structured-output errors.
 func TestGenerateDomainSuggestionsUnmarshalError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +309,8 @@ func TestCleanTextFile(t *testing.T) {
 	}
 }
 
+// TestNormalizeDomain specifies canonical .com spellings and rejection of
+// invalid labels, subdomains, unsupported suffixes, and overlong names.
 func TestNormalizeDomain(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -410,6 +428,8 @@ func runSuggestCLI(t *testing.T, env map[string]string, fileContent string, args
 	return code, calls.snapshot()
 }
 
+// TestRunCLI_ExplicitFlagsBeatEnvFallbacks verifies explicit values, including
+// defaults and zero, take precedence over suggestion environment fallbacks.
 func TestRunCLI_ExplicitFlagsBeatEnvFallbacks(t *testing.T) {
 	cases := []struct {
 		name         string

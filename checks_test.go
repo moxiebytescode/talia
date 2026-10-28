@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// TestRunCLICheckScheduling verifies actual WHOIS overlap, result order, and log
+// policy through the CLI in sequential and lightspeed modes.
 func TestRunCLICheckScheduling(t *testing.T) {
 	for _, tc := range []struct {
 		name, workers string
@@ -25,6 +27,7 @@ func TestRunCLICheckScheduling(t *testing.T) {
 		{"max", "max", 3, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TALIA_LIGHTSPEED", "")
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)

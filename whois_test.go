@@ -19,6 +19,8 @@ func (f fakeWhoisClient) Lookup(domain string) (string, error) {
 	return f.resp, f.err
 }
 
+// TestCheckDomainAvailabilityWithClient verifies raw responses map to the
+// expected availability reason, with failed and empty responses treated as ERROR.
 func TestCheckDomainAvailabilityWithClient(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -72,6 +74,8 @@ func TestCheckDomainAvailabilityWithClient(t *testing.T) {
 	}
 }
 
+// TestNetWhoisClientBoundsStalledResponses verifies the deadline covers silent
+// and partial responses, including partial text that otherwise looks available.
 func TestNetWhoisClientBoundsStalledResponses(t *testing.T) {
 	for _, response := range []string{"", "No match for example.com"} {
 		t.Run(response, func(t *testing.T) {
@@ -139,6 +143,8 @@ func TestNetWhoisClientLookupDialError(t *testing.T) {
 	}
 }
 
+// TestNetWhoisClientLookupEmpty verifies a peer that accepts the query but sends
+// no response returns an empty-response error.
 func TestNetWhoisClientLookupEmpty(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+// TestRunCLIGroupedRechecksReplaceStaleResults verifies that repeated unverified
+// entries produce one fresh result and replace a conflicting stale bucket.
 func TestRunCLIGroupedRechecksReplaceStaleResults(t *testing.T) {
 	server, _ := startCountingWhois(t)
 	path := writeGroupedFixture(t, ExtendedGroupedData{
@@ -21,6 +23,82 @@ func TestRunCLIGroupedRechecksReplaceStaleResults(t *testing.T) {
 	want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "again.com", Reason: ReasonNoMatch}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fresh checks did not replace stale results: %#v", got)
+	}
+}
+
+// TestWriteGroupedFileUsesNormalizedIdentity verifies spellings share a result
+// identity, fresh checks remove equivalent unverified entries, and unrelated
+// records keep their order, spelling, and metadata.
+func TestWriteGroupedFileUsesNormalizedIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing ExtendedGroupedData
+		newest   GroupedData
+		want     ExtendedGroupedData
+	}{
+		{
+			name: "equivalent spellings update and move buckets",
+			existing: ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "KEEP.COM", Reason: ReasonNoMatch, Log: "untouched"},
+					{Domain: " Example.COM.com ", Reason: ReasonNoMatch, Log: "stale"},
+					{Domain: "move.com", Reason: ReasonNoMatch},
+				},
+				Unavailable: []GroupedDomain{
+					{Domain: "b.com", Reason: ReasonTaken},
+					{Domain: " RETURN.COM ", Reason: ReasonTaken},
+				},
+				Unverified: []DomainRecord{
+					{Domain: "EXAMPLE..com"}, {Domain: " MOVE.COM "},
+					{Domain: "return.com.com"}, {Domain: "waiting.com", Log: "keep"},
+				},
+			},
+			newest: GroupedData{
+				Available: []GroupedDomain{
+					{Domain: "example.com", Reason: ReasonNoMatch, Log: "fresh"},
+					{Domain: "Return.COM", Reason: ReasonNoMatch, Log: "returned"},
+				},
+				Unavailable: []GroupedDomain{{Domain: " Move.COM ", Reason: ReasonTaken, Log: "fresh taken"}},
+			},
+			want: ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "KEEP.COM", Reason: ReasonNoMatch, Log: "untouched"},
+					{Domain: "example.com", Reason: ReasonNoMatch, Log: "fresh"},
+					{Domain: "Return.COM", Reason: ReasonNoMatch, Log: "returned"},
+				},
+				Unavailable: []GroupedDomain{
+					{Domain: "b.com", Reason: ReasonTaken},
+					{Domain: " Move.COM ", Reason: ReasonTaken, Log: "fresh taken"},
+				},
+				Unverified: []DomainRecord{{Domain: "waiting.com", Log: "keep"}},
+			},
+		},
+		{
+			name: "invalid domains retain distinct raw identities",
+			existing: ExtendedGroupedData{
+				Available: []GroupedDomain{
+					{Domain: "bad.io", Reason: ReasonNoMatch},
+					{Domain: "other.io", Reason: ReasonNoMatch, Log: "keep"},
+				},
+				Unverified: []DomainRecord{{Domain: "bad.io"}, {Domain: "waiting.io"}},
+			},
+			newest: GroupedData{Unavailable: []GroupedDomain{{Domain: "bad.io", Reason: ReasonError, Log: "fresh error"}}},
+			want: ExtendedGroupedData{
+				Available:   []GroupedDomain{{Domain: "other.io", Reason: ReasonNoMatch, Log: "keep"}},
+				Unavailable: []GroupedDomain{{Domain: "bad.io", Reason: ReasonError, Log: "fresh error"}},
+				Unverified:  []DomainRecord{{Domain: "waiting.io"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeGroupedFixture(t, tc.existing)
+			if err := WriteGroupedFile(path, tc.newest); err != nil {
+				t.Fatal(err)
+			}
+			if got := readGroupedFile(t, path); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("grouped file = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

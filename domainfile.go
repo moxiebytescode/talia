@@ -39,6 +39,8 @@ func readDomainFile(path string, allowEmpty bool) (domainFile, error) {
 	return data, nil
 }
 
+// decodeDomainFile recognizes array and grouped JSON while rejecting scalars
+// and nonempty objects without domain buckets.
 func decodeDomainFile(raw []byte) (domainFile, error) {
 	var data domainFile
 	raw = bytes.TrimSpace(raw)
@@ -79,6 +81,8 @@ func (f domainFile) asGrouped() ExtendedGroupedData {
 	return out
 }
 
+// appendArrayRecord keeps records without a check reason unverified unless
+// they are explicitly available; checked records retain their reason and log.
 func (d *ExtendedGroupedData) appendArrayRecord(rec DomainRecord) {
 	if !rec.Available && rec.Reason == "" {
 		d.Unverified = append(d.Unverified, rec)
@@ -116,6 +120,9 @@ type domainSet struct {
 	removed []string
 }
 
+// include reserves a normalized domain on its first occurrence. It returns
+// an empty string for duplicates or invalid names, recording only invalid names
+// in removed so cleaning can report them separately.
 func (s *domainSet) include(raw string) string {
 	domain := normalizeDomain(raw)
 	if domain == "" {
@@ -132,6 +139,8 @@ func (s *domainSet) include(raw string) string {
 	return domain
 }
 
+// add retains the first normalized occurrence in available, unavailable, then
+// unverified bucket order, preserving the selected record's metadata.
 func (s *domainSet) add(data ExtendedGroupedData) {
 	for _, bucket := range []struct {
 		source []GroupedDomain
@@ -152,6 +161,8 @@ func (s *domainSet) add(data ExtendedGroupedData) {
 	}
 }
 
+// addFile accumulates a domain file with first-write-wins precedence. Array
+// occurrence order is resolved before records are assigned to grouped buckets.
 func (s *domainSet) addFile(file domainFile) {
 	if !file.isArray {
 		s.add(file.grouped)
@@ -167,6 +178,9 @@ func (s *domainSet) addFile(file domainFile) {
 	}
 }
 
+// writeSuggestionsFile appends normalized, unique suggestions as unverified
+// records while preserving existing records. Missing or empty files can be
+// created; every other read or decoding failure prevents writing.
 func writeSuggestionsFile(path string, list []DomainRecord) error {
 	file, err := readDomainFile(path, true)
 	if err != nil {
@@ -187,6 +201,9 @@ func writeSuggestionsFile(path string, list []DomainRecord) error {
 	return os.WriteFile(path, out, 0644)
 }
 
+// cleanSuggestionsFile normalizes and deduplicates a JSON domain file while
+// preserving its array or grouped format. It returns the invalid names removed;
+// duplicates are discarded without being reported as invalid.
 func cleanSuggestionsFile(path string) ([]string, error) {
 	file, err := readDomainFile(path, false)
 	if err != nil {
@@ -238,6 +255,8 @@ func cleanTextFile(path string) ([]string, error) {
 	return set.removed, os.WriteFile(path, []byte(content), 0644)
 }
 
+// mergeFiles combines array and grouped files with first-write-wins identity
+// and writes a grouped file. It returns the total number of unique domains.
 func mergeFiles(outputFile string, inputFiles []string) (int, error) {
 	var set domainSet
 	for _, path := range inputFiles {
@@ -255,6 +274,8 @@ func mergeFiles(outputFile string, inputFiles []string) (int, error) {
 	return total, os.WriteFile(outputFile, out, 0644)
 }
 
+// exportAvailableDomains writes the available records from either JSON shape
+// as one domain per line, preserving stored spelling and returning the count.
 func exportAvailableDomains(inputFile, outputFile string) (int, error) {
 	file, err := readDomainFile(inputFile, false)
 	if err != nil {
@@ -274,6 +295,8 @@ func exportAvailableDomains(inputFile, outputFile string) (int, error) {
 	return len(domains), nil
 }
 
+// existingDomains returns unique, normalized names for the suggestion exclusion
+// list, without rewriting records or including invalid names.
 func (f domainFile) existingDomains() []string {
 	var set domainSet
 	set.add(f.asGrouped())

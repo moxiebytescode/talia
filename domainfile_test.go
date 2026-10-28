@@ -13,6 +13,8 @@ import (
 	"testing"
 )
 
+// TestRunCLISuggestPreservesArrayDomains verifies that suggestions retain array
+// records, metadata, and exclusions when converting to a grouped file.
 func TestRunCLISuggestPreservesArrayDomains(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "key")
 	t.Setenv("WHOIS_SERVER", "")
@@ -49,6 +51,7 @@ func TestRunCLISuggestPreservesArrayDomains(t *testing.T) {
 	}
 }
 
+// writeTestFile creates a domain-file fixture and fails immediately on write errors.
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -56,6 +59,8 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
+// TestRunCLISuggestRejectsInvalidDomainFiles verifies that malformed or unsupported
+// JSON causes neither suggestion requests nor changes to the original bytes.
 func TestRunCLISuggestRejectsInvalidDomainFiles(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "key")
 	var requests atomic.Int64
@@ -82,6 +87,8 @@ func TestRunCLISuggestRejectsInvalidDomainFiles(t *testing.T) {
 	}
 }
 
+// TestRunCLICleanPreservesArrayFormatAndMetadata verifies normalized first-occurrence
+// deduplication without losing the array shape or retained check metadata.
 func TestRunCLICleanPreservesArrayFormatAndMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domains.json")
 	writeTestFile(t, path, `[{"domain":" Example.COM.com ","available":true,"reason":"NO_MATCH","log":"keep"},{"domain":"example.com"},{"domain":"bad.io"}]`)
@@ -102,6 +109,8 @@ func TestRunCLICleanPreservesArrayFormatAndMetadata(t *testing.T) {
 	}
 }
 
+// TestRunCLICleanRejectsMalformedJSONWithoutWriting prevents malformed JSON from
+// being misidentified as a plain text list and overwritten.
 func TestRunCLICleanRejectsMalformedJSONWithoutWriting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domains.json")
 	const content = "{\n\"unverified\": [\n"
@@ -115,6 +124,8 @@ func TestRunCLICleanRejectsMalformedJSONWithoutWriting(t *testing.T) {
 	}
 }
 
+// TestRunCLIMergeAndExportMixedDomainFiles verifies first-write-wins across both
+// JSON shapes and export of available array records in their stored spelling.
 func TestRunCLIMergeAndExportMixedDomainFiles(t *testing.T) {
 	dir := t.TempDir()
 	array, grouped := filepath.Join(dir, "array.json"), filepath.Join(dir, "grouped.json")
@@ -141,6 +152,8 @@ func TestRunCLIMergeAndExportMixedDomainFiles(t *testing.T) {
 	}
 }
 
+// TestRunCLIMergeArrayKeepsFirstOccurrenceAcrossBuckets verifies that a later
+// available record cannot displace an earlier unavailable or unverified record.
 func TestRunCLIMergeArrayKeepsFirstOccurrenceAcrossBuckets(t *testing.T) {
 	for _, tc := range []struct {
 		name, first string
@@ -165,6 +178,8 @@ func TestRunCLIMergeArrayKeepsFirstOccurrenceAcrossBuckets(t *testing.T) {
 	}
 }
 
+// TestWriteSuggestionsFileNormalizesIdentity verifies normalized deduplication
+// while preserving existing records and discarding suggestion check metadata.
 func TestWriteSuggestionsFileNormalizesIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domains.json")
 	writeTestFile(t, path, `{"available":[{"domain":" Example.COM.com ","reason":"NO_MATCH","log":"keep"}],"unverified":[{"domain":"bad.io"}]}`)
