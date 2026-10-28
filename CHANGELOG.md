@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/moxiebytescode/talia/compare/v1.5.0...v1.5.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* merge fresh grouped input checks into output files ([#42](https://github.com/moxiebytescode/talia/issues/42)) ([ad32b5c](https://github.com/moxiebytescode/talia/commit/ad32b5cfe6eb1557ebac36b3a21644710fad0e9a))
+* resolve triaged bugs [#30](https://github.com/moxiebytescode/talia/issues/30)–[#35](https://github.com/moxiebytescode/talia/issues/35) ([#37](https://github.com/moxiebytescode/talia/issues/37)) ([c4612f2](https://github.com/moxiebytescode/talia/commit/c4612f2dd36b4ee976cba7cd2bd5ede8a87c265d))
+
 ## [1.5.0](https://github.com/moxiebytescode/talia/compare/v1.4.0...v1.5.0) (2026-03-11)
 
 
