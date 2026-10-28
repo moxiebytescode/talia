@@ -2,6 +2,7 @@ package talia
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -93,41 +94,18 @@ func WriteGroupedFile(path string, newest GroupedData) error {
 		return nil
 	}
 
-	existing := groupedFile{}
-
-	info, err := os.Stat(path)
-	if err == nil && info.Size() > 0 {
-		if info.IsDir() {
-			return fmt.Errorf("read grouped file: %s is a directory", path)
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
+	file, err := readDomainFile(path, true)
+	if err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
 			return fmt.Errorf("read grouped file: %w", err)
 		}
-		if err := json.Unmarshal(raw, &existing); err != nil {
-			var arr []DomainRecord
-			if err2 := json.Unmarshal(raw, &arr); err2 == nil {
-				existing = groupedFile{GroupedData: ConvertArrayToGrouped(arr)}
-			} else {
-				return fmt.Errorf("parse grouped file: %w", err)
-			}
-		}
-	} else if err == nil && info.IsDir() {
-		return fmt.Errorf("read grouped file: %s is a directory", path)
+		return fmt.Errorf("parse grouped file: %w", err)
 	}
-
-	checked := make(map[string]bool)
-	for _, gd := range newest.Available {
-		checked[gd.Domain] = true
-	}
-	for _, gd := range newest.Unavailable {
-		checked[gd.Domain] = true
-	}
-	merged := groupedFile{GroupedData: mergeGrouped(existing.GroupedData, newest)}
-	for _, rec := range existing.Unverified {
-		if !checked[rec.Domain] {
-			merged.Unverified = append(merged.Unverified, rec)
-		}
+	data := applyGroupedChecks(file.asGrouped(), newest)
+	merged := groupedFile{
+		GroupedData: GroupedData{Available: data.Available, Unavailable: data.Unavailable},
+		Unverified:  data.Unverified,
 	}
 
 	out, err := json.MarshalIndent(merged, "", "  ")
@@ -138,4 +116,23 @@ func WriteGroupedFile(path string, newest GroupedData) error {
 		return fmt.Errorf("write grouped file: %w", err)
 	}
 	return nil
+}
+
+// applyGroupedChecks owns newest-wins transitions for both in-place and separate
+// grouped files. Only fresh checks remove domains from the unverified bucket.
+func applyGroupedChecks(existing ExtendedGroupedData, newest GroupedData) ExtendedGroupedData {
+	checked := make(map[string]bool)
+	for _, bucket := range [][]GroupedDomain{newest.Available, newest.Unavailable} {
+		for _, rec := range bucket {
+			checked[rec.Domain] = true
+		}
+	}
+	merged := mergeGrouped(GroupedData{Available: existing.Available, Unavailable: existing.Unavailable}, newest)
+	out := ExtendedGroupedData{Available: merged.Available, Unavailable: merged.Unavailable}
+	for _, rec := range existing.Unverified {
+		if !checked[rec.Domain] {
+			out.Unverified = append(out.Unverified, rec)
+		}
+	}
+	return out
 }

@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestRunCLIGroupedRechecksReplaceStaleResults(t *testing.T) {
+	server, _ := startCountingWhois(t)
+	path := writeGroupedFixture(t, ExtendedGroupedData{
+		Unavailable: []GroupedDomain{{Domain: "again.com", Reason: ReasonTaken, Log: "stale"}},
+		Unverified:  []DomainRecord{{Domain: "again.com"}, {Domain: "again.com"}},
+	})
+	if code := RunCLI([]string{"--whois=" + server, "--sleep=0", path}); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	got := readGroupedFile(t, path)
+	want := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "again.com", Reason: ReasonNoMatch}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fresh checks did not replace stale results: %#v", got)
+	}
+}
+
 // writeGroupedFixture writes v as JSON to a fresh file and returns its path.
 func writeGroupedFixture(t *testing.T, v any) string {
 	t.Helper()

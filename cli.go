@@ -3,135 +3,14 @@
 package talia
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 )
-
-// checkResult holds the result of a single domain availability check.
-type checkResult struct {
-	Domain string
-	Avail  bool
-	Reason AvailabilityReason
-	Log    string
-}
-
-// shouldIncludeLog determines whether to include the WHOIS log in output.
-func shouldIncludeLog(verbose bool, reason AvailabilityReason) bool {
-	return verbose || reason == ReasonError
-}
-
-// checkDomains performs WHOIS checks on a list of domains and returns the results.
-// If workers > 0, it uses parallel processing with the specified number of workers.
-// If workers == 0, it uses sequential processing with sleep between checks.
-func checkDomains(domains []string, whoisServer string, sleep time.Duration, verbose bool, workers int) []checkResult {
-	if workers > 0 {
-		return checkDomainsParallel(domains, whoisServer, verbose, workers)
-	}
-	return checkDomainsSequential(domains, whoisServer, sleep, verbose)
-}
-
-// checkDomainsSequential performs WHOIS checks sequentially with sleep between checks.
-func checkDomainsSequential(domains []string, whoisServer string, sleep time.Duration, verbose bool) []checkResult {
-	results := make([]checkResult, 0, len(domains))
-	prog := newProgress(len(domains))
-	stats := newCheckStats()
-
-	for _, domain := range domains {
-		avail, reason, logData, err := CheckDomainAvailability(domain, whoisServer)
-		if err != nil {
-			avail = false
-			reason = ReasonError
-			logData = fmt.Sprintf("Error: %v", err)
-		}
-
-		prog.IncrementAndPrint(domain, avail, reason)
-		stats.Record(avail, reason)
-
-		log := ""
-		if shouldIncludeLog(verbose, reason) {
-			log = logData
-		}
-
-		results = append(results, checkResult{
-			Domain: domain,
-			Avail:  avail,
-			Reason: reason,
-			Log:    log,
-		})
-
-		time.Sleep(sleep)
-	}
-
-	stats.PrintSummary()
-	return results
-}
-
-// checkDomainsParallel performs WHOIS checks using a worker pool.
-func checkDomainsParallel(domains []string, whoisServer string, verbose bool, workers int) []checkResult {
-	// workers == -1 means unlimited (one per domain)
-	if workers < 0 || workers > len(domains) {
-		workers = len(domains)
-	}
-
-	results := make([]checkResult, len(domains))
-	prog := newProgress(len(domains))
-	stats := newCheckStats()
-
-	// Job represents a domain to check with its index
-	type job struct {
-		index  int
-		domain string
-	}
-
-	jobs := make(chan job, len(domains))
-	var wg sync.WaitGroup
-
-	// Start workers
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				avail, reason, logData, err := CheckDomainAvailability(j.domain, whoisServer)
-				if err != nil {
-					avail = false
-					reason = ReasonError
-					logData = fmt.Sprintf("Error: %v", err)
-				}
-
-				prog.IncrementAndPrint(j.domain, avail, reason)
-				stats.Record(avail, reason)
-
-				log := ""
-				if shouldIncludeLog(verbose, reason) {
-					log = logData
-				}
-
-				results[j.index] = checkResult{
-					Domain: j.domain,
-					Avail:  avail,
-					Reason: reason,
-					Log:    log,
-				}
-			}
-		}()
-	}
-
-	// Send jobs
-	for i, domain := range domains {
-		jobs <- job{index: i, domain: domain}
-	}
-	close(jobs)
-
-	wg.Wait()
-	stats.PrintSummary()
-	return results
-}
 
 // RunCLIDomainArray handles the original array input logic (non-grouped or grouped output).
 func RunCLIDomainArray(
@@ -152,13 +31,7 @@ func RunCLIDomainArray(
 
 	if !groupedOutput {
 		// =========== Non-Grouped Mode ===========
-		for i, res := range results {
-			domains[i].Available = res.Avail
-			domains[i].Reason = res.Reason
-			domains[i].Log = res.Log
-		}
-
-		out, err := json.MarshalIndent(domains, "", "  ")
+		out, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
 			return 1
@@ -170,19 +43,7 @@ func RunCLIDomainArray(
 		fmt.Println("Processing complete. Updated file:", inputPath)
 	} else {
 		// =========== Grouped Mode ===========
-		groupedData := GroupedData{}
-		for _, res := range results {
-			gd := GroupedDomain{
-				Domain: res.Domain,
-				Reason: res.Reason,
-				Log:    res.Log,
-			}
-			if res.Avail {
-				groupedData.Available = append(groupedData.Available, gd)
-			} else {
-				groupedData.Unavailable = append(groupedData.Unavailable, gd)
-			}
-		}
+		groupedData := ConvertArrayToGrouped(results)
 
 		if outputFile == "" {
 			mergedOut, err := json.MarshalIndent(groupedData, "", "  ")
@@ -221,13 +82,6 @@ func RunCLIGroupedInput(
 		finalOutputFile = inputPath
 	}
 
-	if ext.Available == nil {
-		ext.Available = []GroupedDomain{}
-	}
-	if ext.Unavailable == nil {
-		ext.Unavailable = []GroupedDomain{}
-	}
-
 	// Extract domain names for checking
 	domainNames := make([]string, len(ext.Unverified))
 	for i := range ext.Unverified {
@@ -236,19 +90,7 @@ func RunCLIGroupedInput(
 
 	results := checkDomains(domainNames, whoisServer, sleep, verbose, workers)
 
-	newest := GroupedData{}
-	for _, res := range results {
-		gd := GroupedDomain{
-			Domain: res.Domain,
-			Reason: res.Reason,
-			Log:    res.Log,
-		}
-		if res.Avail {
-			newest.Available = append(newest.Available, gd)
-		} else {
-			newest.Unavailable = append(newest.Unavailable, gd)
-		}
-	}
+	newest := ConvertArrayToGrouped(results)
 
 	if groupedOutput && outputFile != "" {
 		// Only fresh checks may replace results already in the output file.
@@ -257,9 +99,7 @@ func RunCLIGroupedInput(
 			return 1
 		}
 	} else {
-		ext.Available = append(ext.Available, newest.Available...)
-		ext.Unavailable = append(ext.Unavailable, newest.Unavailable...)
-		ext.Unverified = nil
+		ext = applyGroupedChecks(ext, newest)
 
 		out, err := json.MarshalIndent(ext, "", "  ")
 		if err != nil {
@@ -340,7 +180,7 @@ func RunCLI(args []string) int {
 		}
 		var removed []string
 		var err error
-		if json.Valid(raw) {
+		if trimmed := bytes.TrimSpace(raw); json.Valid(raw) || (len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')) {
 			removed, err = cleanSuggestionsFile(targetFile)
 		} else {
 			removed, err = cleanTextFile(targetFile)
@@ -426,11 +266,8 @@ func RunCLI(args []string) int {
 			if n, err := strconv.Atoi(envSuggest); err == nil && n > 0 {
 				// Check if file has unverified domains - if so, don't use env var
 				hasUnverified := false
-				if raw, err := os.ReadFile(targetFile); err == nil {
-					var ext ExtendedGroupedData
-					if json.Unmarshal(raw, &ext) == nil && len(ext.Unverified) > 0 {
-						hasUnverified = true
-					}
+				if file, err := readDomainFile(targetFile, true); err == nil {
+					hasUnverified = len(file.asGrouped().Unverified) > 0
 				}
 				if !hasUnverified {
 					suggestCount = n
@@ -440,6 +277,11 @@ func RunCLI(args []string) int {
 	}
 
 	if suggestCount > 0 {
+		file, err := readDomainFile(targetFile, true)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error reading domain file:", err)
+			return 1
+		}
 		baseURL := *apiBase
 		if baseURL == "" {
 			baseURL = os.Getenv("OPENAI_API_BASE")
@@ -462,7 +304,7 @@ func RunCLI(args []string) int {
 		// Read existing domains to avoid duplicates (unless --fresh is set)
 		var existingDomains []string
 		if !*fresh {
-			existingDomains = readExistingDomains(targetFile)
+			existingDomains = file.existingDomains()
 		}
 
 		parallelReqs := *suggestParallel
@@ -479,42 +321,7 @@ func RunCLI(args []string) int {
 
 		fmt.Printf("Starting %d parallel requests (each requesting %d suggestions)...\n", parallelReqs, suggestCount)
 
-		apiKey := os.Getenv("OPENAI_API_KEY")
-		var allResults []DomainRecord
-		var resultsMu sync.Mutex
-		var wg sync.WaitGroup
-		var firstErr error
-		var errMu sync.Mutex
-		var completed int
-		var completedMu sync.Mutex
-
-		for i := range parallelReqs {
-			wg.Add(1)
-			go func(reqNum int) {
-				defer wg.Done()
-				list, err := GenerateDomainSuggestions(apiKey, promptText, suggestCount, modelName, baseURL, existingDomains)
-
-				completedMu.Lock()
-				completed++
-				current := completed
-				completedMu.Unlock()
-
-				if err != nil {
-					fmt.Printf("  [%d/%d] Request %d failed: %v\n", current, parallelReqs, reqNum+1, err)
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					errMu.Unlock()
-					return
-				}
-				fmt.Printf("  [%d/%d] Request %d returned %d suggestions\n", current, parallelReqs, reqNum+1, len(list))
-				resultsMu.Lock()
-				allResults = append(allResults, list...)
-				resultsMu.Unlock()
-			}(i)
-		}
-		wg.Wait()
+		allResults, firstErr := generateSuggestionBatch(os.Getenv("OPENAI_API_KEY"), promptText, suggestCount, modelName, baseURL, existingDomains, parallelReqs)
 
 		if firstErr != nil && len(allResults) == 0 {
 			fmt.Fprintln(os.Stderr, "Error generating suggestions:", firstErr)
@@ -538,16 +345,12 @@ func RunCLI(args []string) int {
 		if whois != "" && !*noVerify {
 			fmt.Println("Verifying suggestions...")
 			inputPath := targetFile
-			raw, err := os.ReadFile(inputPath)
+			file, err := readDomainFile(inputPath, false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", inputPath, err)
 				return 1
 			}
-			var ext ExtendedGroupedData
-			if err := json.Unmarshal(raw, &ext); err != nil {
-				fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n", inputPath, err)
-				return 1
-			}
+			ext := file.asGrouped()
 			// Use 100ms sleep for auto-verification (or lightspeed if set)
 			verifySleep := 100 * time.Millisecond
 			return RunCLIGroupedInput(whois, inputPath, ext, verifySleep, *verbose, true, "", workers)
@@ -571,21 +374,13 @@ func RunCLI(args []string) int {
 		return 1
 	}
 
-	// Attempt to parse input as a simple array of DomainRecord.
-	var domains []DomainRecord
-	err = json.Unmarshal(raw, &domains)
-	if err == nil {
-		// Plain slice of domain records
-		return RunCLIDomainArray(*whoisServer, inputPath, domains, *sleep, *verbose, *groupedOutput, *outputFile, workers)
+	file, err := decodeDomainFile(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing JSON in %s: %v\n", inputPath, err)
+		return 1
 	}
-
-	// If that fails, try to parse as a grouped JSON that might contain unverified.
-	var ext ExtendedGroupedData
-	if err2 := json.Unmarshal(raw, &ext); err2 == nil {
-		return RunCLIGroupedInput(*whoisServer, inputPath, ext, *sleep, *verbose, *groupedOutput, *outputFile, workers)
+	if file.isArray {
+		return RunCLIDomainArray(*whoisServer, inputPath, file.array, *sleep, *verbose, *groupedOutput, *outputFile, workers)
 	}
-
-	// If both fail, then it's truly invalid JSON or an unexpected format.
-	fmt.Fprintf(os.Stderr, "Error parsing JSON in %s: %v\n", inputPath, err)
-	return 1
+	return RunCLIGroupedInput(*whoisServer, inputPath, file.grouped, *sleep, *verbose, *groupedOutput, *outputFile, workers)
 }

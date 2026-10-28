@@ -3,6 +3,7 @@ package talia
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,16 +11,90 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
-// fakeHTTPClient implements the Do method for testing.
-type fakeHTTPClient struct{ srv *httptest.Server }
+func TestGenerateDomainSuggestionsValidatesToolAndEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, suffix string
+		wantErr            bool
+	}{
+		{"expected tool", "suggest_domains", "", false},
+		{"unexpected tool", "other_tool", "", true},
+		{"trailing slash", "suggest_domains", "/", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/chat/completions" {
+					http.NotFound(w, r)
+					return
+				}
+				if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer key" {
+					t.Error("missing suggestion request method or authorization")
+				}
+				_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":%q,"arguments":"{\"unverified\":[{\"domain\":\"a.com\"}]}"}}]}}]}`, tc.tool)
+			}))
+			t.Cleanup(srv.Close)
+			got, err := GenerateDomainSuggestions("key", "", 1, "test-model", srv.URL+tc.suffix, nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("suggestions = %#v, error = %v", got, err)
+			}
+			if !tc.wantErr && (len(got) != 1 || got[0].Domain != "a.com") {
+				t.Fatalf("suggestions = %#v", got)
+			}
+		})
+	}
+}
 
-func (f fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	rr := httptest.NewRecorder()
-	f.srv.Config.Handler.ServeHTTP(rr, req)
-	return rr.Result(), nil
+func TestRunCLISuggestionBatchFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failures int64
+		wantCode int
+	}{
+		{"all succeed", 0, 0},
+		{"partial failure keeps suggestions", 1, 0},
+		{"all fail preserves file", 3, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OPENAI_API_KEY", "key")
+			t.Setenv("TALIA_LIGHTSPEED", "")
+			var requests atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if requests.Add(1) <= tc.failures {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":"suggest_domains","arguments":"{\"unverified\":[{\"domain\":\"new.com\"}]}"}}]}}]}`)
+			}))
+			t.Cleanup(srv.Close)
+			path := filepath.Join(t.TempDir(), "domains.json")
+			const original = `{"available":[{"domain":"old.com","reason":"NO_MATCH"}]}`
+			writeTestFile(t, path, original)
+			var code int
+			_, stderr := captureOutput(t, func() {
+				code = RunCLI([]string{"--suggest=1", "--suggest-parallel=3", "--no-verify", "--api-base=" + srv.URL, path})
+			})
+			if code != tc.wantCode || requests.Load() != 3 {
+				t.Fatalf("exit = %d, requests = %d, stderr = %q", code, requests.Load(), stderr)
+			}
+			if tc.failures == 3 {
+				raw, err := os.ReadFile(path)
+				if err != nil || string(raw) != original {
+					t.Fatalf("all failures changed domain file: %q, %v", raw, err)
+				}
+			} else {
+				got := readGroupedFile(t, path)
+				if len(got.Available) != 1 || len(got.Unverified) != 1 || got.Unverified[0].Domain != "new.com" {
+					t.Fatalf("partial successes not preserved or deduplicated: %#v", got)
+				}
+				if tc.failures > 0 && !strings.Contains(stderr, "Warning: some requests failed") {
+					t.Fatalf("missing partial failure warning: %q", stderr)
+				}
+			}
+		})
+	}
 }
 
 // TestGenerateDomainSuggestionsSuccess verifies we parse suggestions correctly.
@@ -33,7 +108,7 @@ func TestGenerateDomainSuggestionsSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	got, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err != nil {
 		t.Fatalf("generateSuggestions returned error: %v", err)
 	}
@@ -49,14 +124,14 @@ func TestGenerateDomainSuggestionsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	_, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err == nil {
 		t.Fatal("expected error on HTTP 500")
 	}
 }
 
 func TestRunCLISuggest(t *testing.T) {
-	// Integration test: cannot be parallel due to test hooks and env vars
+	// Environment variables are process-wide, so this CLI test is not parallel.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -64,13 +139,6 @@ func TestRunCLISuggest(t *testing.T) {
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":"suggest_domains","arguments":"{\"unverified\":[{\"domain\":\"b.com\"}]}"}}]}}]}`)
 	}))
 	defer srv.Close()
-
-	testHTTPClient = fakeHTTPClient{srv}
-	testBaseURL = srv.URL
-	t.Cleanup(func() {
-		testHTTPClient = nil
-		testBaseURL = ""
-	})
 
 	tmp, err := os.CreateTemp("", "sugg_*.json")
 	if err != nil {
@@ -82,19 +150,10 @@ func TestRunCLISuggest(t *testing.T) {
 	}
 	defer helperRemove(t, tmp.Name())
 
-	err = os.Setenv("OPENAI_API_KEY", "key")
-	if err != nil {
-		t.Fatalf("os.Setenv error: %v", err)
-	}
-	defer func() {
-		err := os.Unsetenv("OPENAI_API_KEY")
-		if err != nil {
-			t.Fatalf("os.Unsetenv error: %v", err)
-		}
-	}()
+	t.Setenv("OPENAI_API_KEY", "key")
 
 	stdout, _ := captureOutput(t, func() {
-		code := RunCLI([]string{"--suggest=1", tmp.Name()})
+		code := RunCLI([]string{"--suggest=1", "--api-base=" + srv.URL, tmp.Name()})
 		if code != 0 {
 			t.Errorf("expected exit 0, got %d", code)
 		}
@@ -112,59 +171,6 @@ func TestRunCLISuggest(t *testing.T) {
 	}
 	if len(out.Unverified) != 1 || out.Unverified[0].Domain != "b.com" {
 		t.Fatalf("unexpected file contents: %+v", out)
-	}
-}
-
-func TestRunCLISuggestModelFlag(t *testing.T) {
-	// Integration test: cannot be parallel due to test hooks and env vars
-	var gotModel string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		var payload map[string]any
-		_ = json.Unmarshal(b, &payload)
-		if v, ok := payload["model"].(string); ok {
-			gotModel = v
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":"suggest_domains","arguments":"{\"unverified\":[{\"domain\":\"c.com\"}]}"}}]}}]}`)
-	}))
-	defer srv.Close()
-
-	testHTTPClient = fakeHTTPClient{srv}
-	testBaseURL = srv.URL
-	t.Cleanup(func() {
-		testHTTPClient = nil
-		testBaseURL = ""
-	})
-
-	tmp, err := os.CreateTemp("", "sugg_model_*.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tmp.Close(); err != nil {
-		t.Fatalf("tmp.Close() error: %v", err)
-	}
-	defer helperRemove(t, tmp.Name())
-
-	if err := os.Setenv("OPENAI_API_KEY", "key"); err != nil {
-		t.Fatalf("os.Setenv error: %v", err)
-	}
-	defer func() {
-		if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
-			t.Fatalf("os.Unsetenv error: %v", err)
-		}
-	}()
-
-	_, _ = captureOutput(t, func() {
-		code := RunCLI([]string{"--suggest=1", "--model=my-model", tmp.Name()})
-		if code != 0 {
-			t.Errorf("expected exit 0, got %d", code)
-		}
-	})
-
-	if gotModel != "my-model" {
-		t.Fatalf("server received model %q, want %q", gotModel, "my-model")
 	}
 }
 
@@ -197,7 +203,7 @@ func TestGenerateDomainSuggestionsDecodeError(t *testing.T) {
 		_, _ = io.WriteString(w, "not-json")
 	}))
 	defer srv.Close()
-	_, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	_, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("expected decode error, got %v", err)
 	}
@@ -210,7 +216,7 @@ func TestGenerateDomainSuggestionsNoChoices(t *testing.T) {
 		_, _ = io.WriteString(w, `{"choices":[]}`)
 	}))
 	defer srv.Close()
-	_, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	_, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), "no choices") {
 		t.Fatalf("expected no choices error, got %v", err)
 	}
@@ -223,7 +229,7 @@ func TestGenerateDomainSuggestionsNoToolCalls(t *testing.T) {
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[]}}]}`)
 	}))
 	defer srv.Close()
-	_, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	_, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), "no tool calls") {
 		t.Fatalf("expected no tool calls error, got %v", err)
 	}
@@ -236,7 +242,7 @@ func TestGenerateDomainSuggestionsUnmarshalError(t *testing.T) {
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":"suggest_domains","arguments":"not-json"}}]}}]}`)
 	}))
 	defer srv.Close()
-	_, err := generateSuggestions("key", "", 1, "gpt-4o", fakeHTTPClient{srv}, srv.URL, nil)
+	_, err := GenerateDomainSuggestions("key", "", 1, "gpt-4o", srv.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), "unmarshal structured output") {
 		t.Fatalf("expected unmarshal error, got %v", err)
 	}
@@ -300,6 +306,10 @@ func TestNormalizeDomain(t *testing.T) {
 		{"my-domain.com", "my-domain.com"},
 		{"test123.com", "test123.com"},
 		{"a1b2c3.com", "a1b2c3.com"},
+
+		// DNS label length limit
+		{strings.Repeat("a", 63) + ".com", strings.Repeat("a", 63) + ".com"},
+		{strings.Repeat("a", 64) + ".com", ""},
 
 		// Repeated .com suffixes
 		{"example.com.com", "example.com"},
@@ -383,12 +393,6 @@ func runSuggestCLI(t *testing.T, env map[string]string, fileContent string, args
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"function":{"name":"suggest_domains","arguments":"{\"unverified\":[{\"domain\":\"c.com\"}]}"}}]}}]}`)
 	}))
 	t.Cleanup(srv.Close)
-	testHTTPClient = fakeHTTPClient{srv}
-	testBaseURL = srv.URL
-	t.Cleanup(func() {
-		testHTTPClient = nil
-		testBaseURL = ""
-	})
 
 	for _, k := range []string{"TALIA_MODEL", "TALIA_SUGGEST", "TALIA_SUGGEST_PARALLEL", "WHOIS_SERVER", "TALIA_LIGHTSPEED"} {
 		t.Setenv(k, env[k])
@@ -402,7 +406,7 @@ func runSuggestCLI(t *testing.T, env map[string]string, fileContent string, args
 		}
 	}
 	var code int
-	captureOutput(t, func() { code = RunCLI(append(args, file)) })
+	captureOutput(t, func() { code = RunCLI(append(append([]string{"--api-base=" + srv.URL}, args...), file)) })
 	return code, calls.snapshot()
 }
 
@@ -416,6 +420,8 @@ func TestRunCLI_ExplicitFlagsBeatEnvFallbacks(t *testing.T) {
 		wantRequests int
 		wantModel    string
 	}{
+		{"explicit custom model", map[string]string{"TALIA_MODEL": "env-model"}, "",
+			[]string{"--suggest=1", "--model=my-model"}, 0, 1, "my-model"},
 		{"explicit default model", map[string]string{"TALIA_MODEL": "env-model"}, "",
 			[]string{"--suggest=1", "--model=" + defaultOpenAIModel}, 0, 1, defaultOpenAIModel},
 		{"model from env", map[string]string{"TALIA_MODEL": "env-model"}, "",

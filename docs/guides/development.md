@@ -33,10 +33,12 @@ export OPENAI_API_KEY=sk-...
 ```
 cmd/talia/main.go     # binary entry point
 cli.go                # flag parsing and orchestration
+checks.go             # ordered WHOIS checks and sequential/parallel scheduling
 whois.go              # TCP WHOIS client
 types.go              # all data structures
 grouped.go            # merge/deduplicate logic for grouped format
-suggestions.go        # OpenAI API, normalization, file utilities
+domainfile.go         # array/grouped decoding, normalization, clean, merge, export
+suggestions.go        # tool-calling requests and concurrent suggestion batches
 progress.go           # thread-safe progress output
 env.go                # .env file loader
 ```

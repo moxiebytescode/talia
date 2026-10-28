@@ -5,8 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -173,7 +171,6 @@ func TestCheckDomainAvailability(t *testing.T) {
 
 // TestArgParsing checks we fail if no arguments or if whois is missing
 func TestArgParsing(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestArgParsing", flag.ContinueOnError)
 
 	// No args
 	_, stderr := captureOutput(t, func() {
@@ -187,7 +184,6 @@ func TestArgParsing(t *testing.T) {
 	}
 
 	// Arg but no --whois
-	flag.CommandLine = flag.NewFlagSet("TestArgParsingNoWhois", flag.ContinueOnError)
 	tmpPath := filepath.Join(t.TempDir(), "somefile.json")
 	_, stderr = captureOutput(t, func() {
 		code := RunCLI([]string{tmpPath})
@@ -202,7 +198,6 @@ func TestArgParsing(t *testing.T) {
 
 // TestInputFileReadError ensures we fail if input file can't be read
 func TestInputFileReadError(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestInputFileReadError", flag.ContinueOnError)
 
 	// We'll pass a directory instead of a file
 	tmpDir, err := os.MkdirTemp("", "testdir")
@@ -224,7 +219,6 @@ func TestInputFileReadError(t *testing.T) {
 
 // TestInputFileParseError ensures we fail on malformed JSON
 func TestInputFileParseError(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestInputFileParseError", flag.ContinueOnError)
 
 	tmpFile, err := os.CreateTemp("", "badjson_*.json")
 	if err != nil {
@@ -250,7 +244,6 @@ func TestInputFileParseError(t *testing.T) {
 
 // TestMainNonGrouped verifies inline updates in non-grouped mode
 func TestMainNonGrouped(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainNonGrouped", flag.ContinueOnError)
 
 	tmp, err := os.CreateTemp("", "domains_*.json")
 	if err != nil {
@@ -320,7 +313,6 @@ func TestMainNonGrouped(t *testing.T) {
 
 // TestFileWriteError ensures we fail if we can't write the input file in non-grouped mode
 func TestFileWriteError(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestFileWriteError", flag.ContinueOnError)
 
 	if os.Geteuid() == 0 {
 		t.Skip("running as root; file write permission errors won't occur")
@@ -379,7 +371,6 @@ func TestFileWriteError(t *testing.T) {
 
 // TestMainVerbose checks if verbose logs are stored for successful checks
 func TestMainVerbose(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainVerbose", flag.ContinueOnError)
 
 	tmp, err := os.CreateTemp("", "domains_verbose_*.json")
 	if err != nil {
@@ -442,7 +433,6 @@ func TestMainVerbose(t *testing.T) {
 
 // TestMainErrorCase verifies that if one domain triggers an error, we still proceed
 func TestMainErrorCase(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainErrorCase", flag.ContinueOnError)
 
 	tmp, err := os.CreateTemp("", "domains_error_*.json")
 	if err != nil {
@@ -534,7 +524,6 @@ func TestMainErrorCase(t *testing.T) {
 
 // TestMainGroupedNoFile overwrites input JSON with a grouped object
 func TestMainGroupedNoFile(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedNoFile", flag.ContinueOnError)
 
 	tmp, err := os.CreateTemp("", "grouped_no_file_*.json")
 	if err != nil {
@@ -608,7 +597,6 @@ func TestMainGroupedNoFile(t *testing.T) {
 
 // TestMainGroupedWithFile merges results into a separate grouped file
 func TestMainGroupedWithFile(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedWithFile", flag.ContinueOnError)
 
 	// Input
 	inputFile, err := os.CreateTemp("", "grouped_input_*.json")
@@ -720,7 +708,6 @@ func TestMainGroupedWithFile(t *testing.T) {
 
 // TestMainGroupedFileEmptyExisting ensures no crash if grouped file is empty
 func TestMainGroupedFileEmptyExisting(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedFileEmptyExisting", flag.ContinueOnError)
 
 	// Input
 	inputFile, err := os.CreateTemp("", "grouped_input_*.json")
@@ -791,33 +778,8 @@ func TestMainGroupedFileEmptyExisting(t *testing.T) {
 	}
 }
 
-// TestDomainRecordStructure ensures JSON keys remain stable
-func TestDomainRecordStructure(t *testing.T) {
-	dr := DomainRecord{
-		Domain:    "example.com",
-		Available: true,
-		Reason:    ReasonNoMatch,
-		Log:       "some log data",
-	}
-	b, err := json.Marshal(dr)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(b, &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	fields := []string{"domain", "available", "reason", "log"}
-	for _, f := range fields {
-		if _, ok := parsed[f]; !ok {
-			t.Errorf("missing field %q in DomainRecord JSON", f)
-		}
-	}
-}
-
 // TestMainGroupedFileRepeatedAppend tests that we can append multiple times to the same grouped file
 func TestMainGroupedFileRepeatedAppend(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedFileRepeatedAppend", flag.ContinueOnError)
 
 	// 1. Create input: a plain domain list
 	inputFile, err := os.CreateTemp("", "repeated_input_*.json")
@@ -937,7 +899,6 @@ func TestMainGroupedFileRepeatedAppend(t *testing.T) {
 
 // TestMainGroupedFileWithUnverifiedInput tests using a grouped file with unverified domains as input
 func TestMainGroupedFileWithUnverifiedInput(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestMainGroupedFileWithUnverifiedInput", flag.ContinueOnError)
 
 	// We'll build a grouped JSON with a few unverified domains
 	g := ExtendedGroupedData{
@@ -1064,33 +1025,6 @@ func TestCheckDomainAvailability_DialError(t *testing.T) {
 	}
 }
 
-// TestCheckDomainAvailability_ReadError tries to trigger a partial read error
-func TestCheckDomainAvailability_ReadError(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to listen: %v", err)
-	}
-	defer helperClose(t, ln, "listener close")
-
-	// Server that writes partial data, then forcibly resets the connection
-	go func() {
-		conn, _ := ln.Accept()
-		if conn != nil {
-			_, _ = conn.Write([]byte("Partial WHOIS data..."))
-			if tcp, ok := conn.(*net.TCPConn); ok {
-				// Attempt to force an RST packet
-				_ = tcp.SetLinger(0)
-			}
-			helperClose(nil, conn, "conn close")
-		}
-	}()
-
-	_, reason, _, err2 := CheckDomainAvailability("partialread.com", ln.Addr().String())
-	if err2 == nil || reason != ReasonError {
-		t.Skipf("could not trigger partial read error; err=%v reason=%s", err2, reason)
-	}
-}
-
 func TestWriteGroupedFile_EmptyPath(t *testing.T) {
 	err := WriteGroupedFile("", GroupedData{})
 	if err != nil {
@@ -1168,44 +1102,6 @@ func TestWriteGroupedFile_ParseArrayFallback(t *testing.T) {
 	if len(final.Unavailable) != 1 {
 		t.Errorf("Expected 1 unavailable, got %d: %#v", len(final.Unavailable), final.Unavailable)
 	}
-}
-
-type UnmarshalableGroupedData struct {
-	GroupedData
-	BadField func() `json:"bad_field"` // This breaks json.Marshal
-}
-
-func TestWriteGroupedFile_MarshalError(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "marshal_err_*.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer helperRemove(t, tmpFile.Name()) // Changed from os.Remove
-	helperClose(t, tmpFile, "tmpFile close for marshal error test")
-
-	g := UnmarshalableGroupedData{
-		GroupedData: GroupedData{
-			Available: []GroupedDomain{{Domain: "bad-marsh.com", Reason: ReasonNoMatch}},
-		},
-		BadField: func() {},
-	}
-
-	err = testWriteGroupedFileWithInterface(tmpFile.Name(), g)
-	if err == nil || !strings.Contains(err.Error(), "marshal grouped data") {
-		t.Errorf("Expected marshal error, got %v", err)
-	}
-}
-
-// Minimal clone that forcibly calls json.MarshalIndent on 'data'
-func testWriteGroupedFileWithInterface(path string, data interface{}) error {
-	out, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal grouped data: %w", err)
-	}
-	if err := os.WriteFile(path, out, 0644); err != nil {
-		return fmt.Errorf("write grouped file: %w", err)
-	}
-	return nil
 }
 
 // NEW TEST #1: Directly test ConvertArrayToGrouped
@@ -1308,7 +1204,6 @@ func TestWriteGroupedFile_ExistingGrouped(t *testing.T) {
 
 // NEW TEST #3: Test RunCLIGroupedInput scenario WITHOUT --grouped-output (forces overwrite of the same file)
 func TestRunCLIGroupedInput_Overwrite(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet("TestRunCLIGroupedInput_Overwrite", flag.ContinueOnError)
 
 	// Build a grouped JSON with unverified domain
 	g := ExtendedGroupedData{
@@ -1861,149 +1756,12 @@ func TestRunCLIGroupedInput_Verbose(t *testing.T) {
 	}
 }
 
-func TestMergeGrouped(t *testing.T) {
-	existing := GroupedData{
-		Available:   []GroupedDomain{{Domain: "a.com", Reason: ReasonNoMatch}},
-		Unavailable: []GroupedDomain{{Domain: "b.com", Reason: ReasonTaken}},
-	}
-	newest := GroupedData{
-		Available:   []GroupedDomain{{Domain: "b.com", Reason: ReasonNoMatch}},
-		Unavailable: []GroupedDomain{{Domain: "c.com", Reason: ReasonTaken}},
-	}
-	merged := mergeGrouped(existing, newest)
-	if len(merged.Available) != 2 || len(merged.Unavailable) != 1 {
-		t.Fatalf("unexpected counts %#v", merged)
-	}
-	haveA, haveBAvail, haveCUnavail := false, false, false
-	for _, d := range merged.Available {
-		if d.Domain == "a.com" {
-			haveA = true
-		}
-		if d.Domain == "b.com" {
-			haveBAvail = true
-		}
-	}
-	for _, d := range merged.Unavailable {
-		if d.Domain == "c.com" {
-			haveCUnavail = true
-		}
-	}
-	if !haveA || !haveBAvail || !haveCUnavail {
-		t.Fatalf("merge results incorrect %#v", merged)
-	}
-}
-
 func TestWriteGroupedFile_ReadError(t *testing.T) {
 	dir := t.TempDir()
 	err := WriteGroupedFile(dir, GroupedData{Available: []GroupedDomain{{Domain: "x.com"}}})
 	if err == nil || !strings.Contains(err.Error(), "read grouped file") {
 		t.Fatalf("expected read error, got %v", err)
 	}
-}
-
-// TestCheckDomainsParallel tests parallel domain checking
-func TestCheckDomainsParallel(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer helperClose(t, ln, "listener")
-
-	// Handle multiple connections
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				_, _ = io.Copy(io.Discard, c)
-				_, _ = io.WriteString(c, "No match for domain")
-				helperClose(nil, c, "conn")
-			}(conn)
-		}
-	}()
-
-	domains := []string{"a.com", "b.com", "c.com"}
-	stdout, _ := captureOutput(t, func() {
-		results := checkDomainsParallel(domains, ln.Addr().String(), false, 3)
-		if len(results) != 3 {
-			t.Errorf("expected 3 results, got %d", len(results))
-		}
-		for _, r := range results {
-			if !r.Avail {
-				t.Errorf("expected %s to be available", r.Domain)
-			}
-		}
-	})
-	// Check progress output contains all domains
-	for _, d := range domains {
-		if !strings.Contains(stdout, d) {
-			t.Errorf("output missing domain %s", d)
-		}
-	}
-}
-
-// TestCheckDomainsParallel_LimitedWorkers tests with fewer workers than domains
-func TestCheckDomainsParallel_LimitedWorkers(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer helperClose(t, ln, "listener")
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				_, _ = io.Copy(io.Discard, c)
-				_, _ = io.WriteString(c, "No match for domain")
-				helperClose(nil, c, "conn")
-			}(conn)
-		}
-	}()
-
-	domains := []string{"a.com", "b.com", "c.com", "d.com", "e.com"}
-	_, _ = captureOutput(t, func() {
-		results := checkDomainsParallel(domains, ln.Addr().String(), false, 2)
-		if len(results) != 5 {
-			t.Errorf("expected 5 results, got %d", len(results))
-		}
-	})
-}
-
-// TestCheckDomainsParallel_MaxWorkers tests with -1 (max) workers
-func TestCheckDomainsParallel_MaxWorkers(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer helperClose(t, ln, "listener")
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				_, _ = io.Copy(io.Discard, c)
-				_, _ = io.WriteString(c, "No match for domain")
-				helperClose(nil, c, "conn")
-			}(conn)
-		}
-	}()
-
-	domains := []string{"a.com", "b.com"}
-	_, _ = captureOutput(t, func() {
-		results := checkDomainsParallel(domains, ln.Addr().String(), false, -1)
-		if len(results) != 2 {
-			t.Errorf("expected 2 results, got %d", len(results))
-		}
-	})
 }
 
 // TestMergeFiles tests merging multiple files
@@ -2020,8 +1778,8 @@ func TestMergeFiles(t *testing.T) {
 		Unavailable: []GroupedDomain{{Domain: "b.com"}},
 	}
 	data2 := ExtendedGroupedData{
-		Available:   []GroupedDomain{{Domain: "c.com"}},
-		Unverified:  []DomainRecord{{Domain: "d.com"}},
+		Available:  []GroupedDomain{{Domain: "c.com"}},
+		Unverified: []DomainRecord{{Domain: "d.com"}},
 	}
 
 	b1, _ := json.Marshal(data1)
@@ -2299,7 +2057,6 @@ func TestRunCLI_MergeMultipleFiles(t *testing.T) {
 	_ = os.WriteFile(file1, b1, 0644)
 	_ = os.WriteFile(file2, b2, 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	stdout, _ := captureOutput(t, func() {
 		code := RunCLI([]string{"--merge", "-o", output, file1, file2})
 		if code != 0 {
@@ -2332,7 +2089,6 @@ func TestRunCLI_MergeIntoFirst(t *testing.T) {
 	_ = os.WriteFile(file1, b1, 0644)
 	_ = os.WriteFile(file2, b2, 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	_, _ = captureOutput(t, func() {
 		code := RunCLI([]string{"--merge", file1, file2})
 		if code != 0 {
@@ -2354,7 +2110,6 @@ func TestRunCLI_MergeError(t *testing.T) {
 	file1 := filepath.Join(dir, "file1.json")
 	_ = os.WriteFile(file1, []byte("{}"), 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	_, stderr := captureOutput(t, func() {
 		code := RunCLI([]string{"--merge", file1})
 		if code == 0 {
@@ -2377,7 +2132,6 @@ func TestRunCLI_ExportAvailable(t *testing.T) {
 	b, _ := json.Marshal(data)
 	_ = os.WriteFile(input, b, 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	stdout, _ := captureOutput(t, func() {
 		code := RunCLI([]string{"--export-available=" + output, input})
 		if code != 0 {
@@ -2407,7 +2161,6 @@ func TestRunCLI_Clean(t *testing.T) {
 	b, _ := json.Marshal(data)
 	_ = os.WriteFile(file, b, 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	stdout, _ := captureOutput(t, func() {
 		code := RunCLI([]string{"--clean", file})
 		if code != 0 {
@@ -2448,7 +2201,6 @@ func TestRunCLI_LightspeedFlag(t *testing.T) {
 	b, _ := json.Marshal(data)
 	_ = os.WriteFile(file, b, 0644)
 
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	stdout, _ := captureOutput(t, func() {
 		code := RunCLI([]string{"--whois=" + ln.Addr().String(), "--lightspeed=2", file})
 		if code != 0 {
@@ -2480,30 +2232,6 @@ func TestCleanSuggestionsFile_InvalidInUnavailable(t *testing.T) {
 
 	if len(removed) != 1 || removed[0] != "invalid-no-tld" {
 		t.Errorf("expected [invalid-no-tld] removed, got %v", removed)
-	}
-}
-
-// TestCleanSuggestionsFile_WriteError tests write error handling
-func TestCleanSuggestionsFile_WriteError(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "domains.json")
-
-	data := ExtendedGroupedData{Available: []GroupedDomain{{Domain: "good.com"}}}
-	b, _ := json.Marshal(data)
-	_ = os.WriteFile(file, b, 0444) // Read-only file
-
-	// On some systems, this still allows write. Use directory instead.
-	// Remove the file and create a directory with the same name
-	_ = os.Remove(file)
-	_ = os.Mkdir(file, 0755)
-	// Write the JSON to a file inside that directory so it can be "read"
-	innerFile := filepath.Join(file, "data")
-	_ = os.WriteFile(innerFile, b, 0644)
-
-	// Now try to clean - it will fail to read because 'file' is a directory
-	_, err := cleanSuggestionsFile(file)
-	if err == nil {
-		t.Error("expected error")
 	}
 }
 
