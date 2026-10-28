@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/moxiebytescode/talia/compare/v1.5.1...v1.6.0) (2026-10-28)
+
+
+### Features
+
+* support native OpenAI and Anthropic suggestion APIs ([#44](https://github.com/moxiebytescode/talia/issues/44)) ([6d7e722](https://github.com/moxiebytescode/talia/commit/6d7e722fc0507b917aed9ee89b3cc3fbfc164d05))
+
 ## [1.5.1](https://github.com/moxiebytescode/talia/compare/v1.5.0...v1.5.1) (2026-10-28)
 
 
